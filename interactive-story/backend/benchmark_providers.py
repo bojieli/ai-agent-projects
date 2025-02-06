@@ -120,7 +120,21 @@ async def main():
     # Configure providers
     providers = [
         {
-            "name": "Doubao",
+            "name": "Doubao 1.5 Lite 32K",
+            "url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+            "payload": {
+                "model": "ep-20250206211726-ctqtj",
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "max_tokens": 4096,
+            },
+            "headers": {
+                "Authorization": f"Bearer {ARK_API_KEY}",
+                "Content-Type": "application/json"
+            }
+        },
+        {
+            "name": "Doubao 1.5 Pro 32K",
             "url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
             "payload": {
                 "model": "ep-20250206203431-bql9h",
@@ -134,7 +148,21 @@ async def main():
             }
         },
         {
-            "name": "SiliconFlow",
+            "name": "Doubao DeepSeek V3",
+            "url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+            "payload": {
+                "model": "ep-20250206212003-d6k2m",
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "max_tokens": 4096,
+            },
+            "headers": {
+                "Authorization": f"Bearer {ARK_API_KEY}",
+                "Content-Type": "application/json"
+            }
+        },
+        {
+            "name": "SiliconFlow DeepSeek V3",
             "url": "https://api.siliconflow.cn/v1/chat/completions",
             "payload": {
                 "model": "deepseek-ai/DeepSeek-V3",
