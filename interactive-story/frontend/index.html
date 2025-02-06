@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>互动小说游戏</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #gameSection, #characterSection { display: none; }
+    .section { margin-bottom: 20px; }
+    .chat { border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: scroll; background: #f9f9f9; }
+  </style>
+</head>
+<body>
+  <h1>互动小说游戏</h1>
+
+  <!-- 章节输入区域 -->
+  <div id="chapterSection" class="section">
+    <h2>请输入小说章节内容</h2>
+    <div style="margin-bottom: 10px;">
+      <label for="storySelect">选择已有故事：</label>
+      <select id="storySelect" style="width: 400px;">
+        <option value="">-- 请选择故事 --</option>
+      </select>
+    </div>
+    <textarea id="chapterText" rows="10" cols="80" placeholder="故事内容将显示在这里，您也可以直接输入新故事"></textarea><br>
+    <button id="startGameBtn">开始游戏</button>
+  </div>
+
+  <!-- 角色选择区域 -->
+  <div id="characterSection" class="section">
+    <h2>请选择你的角色</h2>
+    <div id="characterList"></div>
+    <button id="selectCharacterBtn">确定选择</button>
+  </div>
+
+  <!-- 关卡游戏区域 -->
+  <div id="gameSection" class="section">
+    <h2 id="levelTitle"></h2>
+    <p id="levelDescription"></p>
+    <img id="levelImage" src="" alt="背景图片" style="max-width:600px;"><br>
+    <p><strong>AI (<span id="aiRole"></span>)：</strong> <span id="aiDialogue"></span></p>
+
+    <h3>请输入你的回应</h3>
+    <input type="text" id="userResponse" style="width: 400px;">
+    <button id="submitResponseBtn">提交回应</button>
+    <p id="evaluationFeedback"></p>
+  </div>
+
+  <!-- 聊天记录区域 -->
+  <div id="chatHistorySection" class="section">
+    <h2>聊天记录</h2>
+    <div id="chatHistory" class="chat"></div>
+  </div>
+
+  <!-- 调试日志区域 -->
+  <div id="debugPanel" class="section">
+    <h2>调试日志</h2>
+    <pre id="debugOutput" style="border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: scroll; white-space: pre-wrap; word-wrap: break-word;"></pre>
+  </div>
+
+  <script>
+    let sessionId = null;
+    let selectedCharacterIndex = null;
+
+    // 启动 SSE 调试日志流，将接收到的调试日志显示在 debugOutput 区域
+    const eventSource = new EventSource("/debug_stream");
+
+    // 设置一个全局变量，用于保存当前活跃的请求日志块
+    let currentLogBlock = null;
+
+    eventSource.onmessage = function(event) {
+      const debugOutput = document.getElementById("debugOutput");
+      try {
+        const logData = JSON.parse(event.data);
+        // 当收到 "log" 类型消息时，检查是否属于新请求启动
+        if (logData.type === "log") {
+          // 如果消息包含"发送文本生成请求"或"开始生成"，则认为这是新请求的起始信号
+          if (logData.log.includes("发送文本生成请求") || logData.log.includes("开始生成")) {
+            // 创建新的日志块
+            let block = document.createElement("div");
+            block.className = "log-block";
+
+            let genericDiv = document.createElement("div");
+            genericDiv.className = "generic-log";
+            genericDiv.innerHTML = "<strong>日志：</strong><br>" + logData.log;
+
+            let intermediateDiv = document.createElement("div");
+            intermediateDiv.className = "intermediate-section";
+            intermediateDiv.innerHTML = "<strong>中间推理过程：</strong><br>";
+
+            let finalDiv = document.createElement("div");
+            finalDiv.className = "final-section";
+            finalDiv.innerHTML = "<strong>最终答案：</strong><br>";
+
+            block.appendChild(genericDiv);
+            block.appendChild(intermediateDiv);
+            block.appendChild(finalDiv);
+
+            debugOutput.appendChild(block);
+            currentLogBlock = block;  // 将当前块作为活跃块
+          } else {
+            // 普通 log 消息附加到当前活跃块中的 generic 部分
+            if (!currentLogBlock) {
+              let block = document.createElement("div");
+              block.className = "log-block";
+              currentLogBlock = block;
+              debugOutput.appendChild(block);
+            }
+            let genericDiv = currentLogBlock.querySelector(".generic-log");
+            if (!genericDiv) {
+              genericDiv = document.createElement("div");
+              genericDiv.className = "generic-log";
+              currentLogBlock.appendChild(genericDiv);
+            }
+            let logEntry = document.createElement("div");
+            logEntry.textContent = logData.log;
+            genericDiv.appendChild(logEntry);
+          }
+        } else if (logData.type === "intermediate") {
+          // 更新当前活跃块的中间推理区域（替换之前的内容），而不重复追加
+          if (currentLogBlock) {
+            let intermediateDiv = currentLogBlock.querySelector(".intermediate-section");
+            if (!intermediateDiv) {
+              intermediateDiv = document.createElement("div");
+              intermediateDiv.className = "intermediate-section";
+              currentLogBlock.appendChild(intermediateDiv);
+            }
+            intermediateDiv.innerHTML = "<strong>中间推理过程：</strong><br>" + logData.log;
+          } else {
+            // 若没有当前块，则新建
+            let block = document.createElement("div");
+            block.className = "log-block";
+            let intermediateDiv = document.createElement("div");
+            intermediateDiv.className = "intermediate-section";
+            intermediateDiv.innerHTML = "<strong>中间推理过程：</strong><br>" + logData.log;
+            block.appendChild(intermediateDiv);
+            debugOutput.appendChild(block);
+            currentLogBlock = block;
+          }
+        } else if (logData.type === "final") {
+          // 更新当前活跃块的最终答案区域，仅替换已有内容
+          if (currentLogBlock) {
+            let finalDiv = currentLogBlock.querySelector(".final-section");
+            if (!finalDiv) {
+              finalDiv = document.createElement("div");
+              finalDiv.className = "final-section";
+              currentLogBlock.appendChild(finalDiv);
+            }
+            finalDiv.innerHTML = "<strong>最终答案：</strong><br>" + logData.log;
+          } else {
+            let block = document.createElement("div");
+            block.className = "log-block";
+            let finalDiv = document.createElement("div");
+            finalDiv.className = "final-section";
+            finalDiv.innerHTML = "<strong>最终答案：</strong><br>" + logData.log;
+            block.appendChild(finalDiv);
+            debugOutput.appendChild(block);
+            currentLogBlock = block;
+          }
+        } else {
+          // 其他类型的日志直接作为新行追加
+          const logEntry = document.createElement("div");
+          logEntry.textContent = logData.log;
+          debugOutput.appendChild(logEntry);
+        }
+        // 自动滚动到底部
+        debugOutput.scrollTop = debugOutput.scrollHeight;
+      } catch (e) {
+        console.error("Error parsing debug log:", e);
+      }
+    };
+
+    // 页面加载时获取故事列表并填充下拉菜单
+    async function loadStoryList() {
+      try {
+        const response = await fetch("/list_stories");
+        const stories = await response.json();
+        const select = document.getElementById("storySelect");
+        select.innerHTML = '<option value="">-- 请选择故事 --</option>';
+        
+        stories.forEach((story, index) => {
+          const option = document.createElement("option");
+          option.value = story.id;
+          option.textContent = `${story.title} - ${story.author} (${story.generated ? "已生成" : "未生成"}) | ${story.excerpt}`;
+          select.appendChild(option);
+        });
+      } catch (err) {
+        console.error("加载已有故事失败", err);
+      }
+    }
+    
+    // 页面加载时初始化故事列表
+    window.addEventListener("load", loadStoryList);
+    
+    // 当选择故事时更新文本框内容
+    document.getElementById("storySelect").addEventListener("change", async function() {
+      const selectedId = this.value;
+      if (!selectedId) {
+        document.getElementById("chapterText").value = "";
+        return;
+      }
+      
+      try {
+        const response = await fetch("/list_stories");
+        const stories = await response.json();
+        const selectedStory = stories.find(s => s.id === Number(selectedId));
+        if (selectedStory) {
+          document.getElementById("chapterText").value = selectedStory.content;
+        }
+      } catch (err) {
+        console.error("加载故事失败", err);
+      }
+    });
+
+    document.getElementById("startGameBtn").addEventListener("click", async () => {
+      const chapterText = document.getElementById("chapterText").value.trim();
+      if (!chapterText) {
+        alert("请输入章节内容！");
+        return;
+      }
+      const res = await fetch("/create_game", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapter_text: chapterText })
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+      sessionId = data.session_id;
+      // 显示剧情概述图片及角色列表
+      document.getElementById("chapterSection").style.display = "none";
+      document.getElementById("characterSection").style.display = "block";
+      displayCharacters(data.characters);
+      updateChat(`系统：${data.message}`);
+    });
+
+    function displayCharacters(characters) {
+      const listDiv = document.getElementById("characterList");
+      listDiv.innerHTML = "";
+      characters.forEach((char, index) => {
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "character";
+        radio.value = index;
+        if (index === 0) radio.checked = true;
+        const label = document.createElement("label");
+        label.innerText = `${char.name} - ${char.description}`;
+        const br = document.createElement("br");
+        listDiv.appendChild(radio);
+        listDiv.appendChild(label);
+        listDiv.appendChild(br);
+      });
+    }
+
+    document.getElementById("selectCharacterBtn").addEventListener("click", async () => {
+      const radios = document.getElementsByName("character");
+      let index = 0;
+      for (const radio of radios) {
+        if (radio.checked) {
+          index = parseInt(radio.value);
+          break;
+        }
+      }
+      const res = await fetch("/select_character", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, character_index: index })
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+      updateChat(`系统：${data.message}`);
+      document.getElementById("characterSection").style.display = "none";
+      document.getElementById("gameSection").style.display = "block";
+      loadLevel();
+    });
+
+    async function loadLevel() {
+      const res = await fetch("/get_level", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId })
+      });
+      const data = await res.json();
+      if (data.game_over) {
+        updateChat("系统：游戏结束，所有关卡均已通过！");
+        document.getElementById("gameSection").style.display = "none";
+        return;
+      }
+      document.getElementById("levelTitle").innerText = `关卡 ${data.level_number}`;
+      document.getElementById("levelDescription").innerText = data.description;
+      document.getElementById("levelImage").src = data.level_image;
+      document.getElementById("aiRole").innerText = data.ai_role;
+      document.getElementById("aiDialogue").innerText = data.ai_dialogue;
+    }
+
+    document.getElementById("submitResponseBtn").addEventListener("click", async () => {
+      const userResponse = document.getElementById("userResponse").value.trim();
+      if (!userResponse) {
+        alert("请输入你的回应！");
+        return;
+      }
+      const res = await fetch("/submit_response", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, user_response: userResponse })
+      });
+      const data = await res.json();
+      updateChat(`用户：${userResponse}`);
+      updateChat(`系统评价：${data.evaluation_feedback}`);
+      document.getElementById("evaluationFeedback").innerText = data.message;
+      document.getElementById("userResponse").value = "";
+      if (data.passed) {
+        // 延时加载下一关卡
+        setTimeout(loadLevel, 1500);
+      }
+    });
+
+    function updateChat(message) {
+      const chatDiv = document.getElementById("chatHistory");
+      chatDiv.innerHTML += `<p>${message}</p>`;
+      chatDiv.scrollTop = chatDiv.scrollHeight;
+    }
+  </script>
+</body>
+</html> 
