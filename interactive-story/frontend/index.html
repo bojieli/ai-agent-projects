@@ -37,12 +37,23 @@
   <div id="gameSection" class="section">
     <h2 id="levelTitle"></h2>
     <p id="levelDescription"></p>
-    <img id="levelImage" src="" alt="背景图片" style="max-width:600px;"><br>
-    <p><strong>AI (<span id="aiRole"></span>)：</strong> <span id="aiDialogue"></span></p>
+    <div id="imageContainer" style="position: relative; display: inline-block;">
+      <img id="levelImage" src="" alt="背景图片" style="max-width:600px;">
+      <!-- 加载动画遮罩 -->
+      <div id="imageSpinner" style="position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.7);display:none;align-items:center;justify-content:center;">
+         <span>加载中...</span>
+      </div>
+    </div><br>
+    <p><strong>AI (<span id="aiRole"></span>)：</strong> <span id="aiDialogue">加载中...</span></p>
 
     <h3>请输入你的回应</h3>
-    <input type="text" id="userResponse" style="width: 400px;">
-    <button id="submitResponseBtn">提交回应</button>
+    <div class="response-container" style="display: flex; align-items: center; gap: 10px;">
+      <input type="text" id="userResponse" style="width: 400px;" disabled>
+      <button id="submitResponseBtn" disabled>
+        <span class="button-text">提交回应</span>
+        <span class="loading-spinner" style="display: none;">评估中...</span>
+      </button>
+    </div>
     <p id="evaluationFeedback"></p>
   </div>
 
@@ -72,99 +83,37 @@
       const debugOutput = document.getElementById("debugOutput");
       try {
         const logData = JSON.parse(event.data);
-        // 当收到 "log" 类型消息时，检查是否属于新请求启动
-        if (logData.type === "log") {
-          // 如果消息包含"发送文本生成请求"或"开始生成"，则认为这是新请求的起始信号
-          if (logData.log.includes("发送文本生成请求") || logData.log.includes("开始生成")) {
-            // 创建新的日志块
-            let block = document.createElement("div");
-            block.className = "log-block";
-
-            let genericDiv = document.createElement("div");
-            genericDiv.className = "generic-log";
-            genericDiv.innerHTML = "<strong>日志：</strong><br>" + logData.log;
-
-            let intermediateDiv = document.createElement("div");
-            intermediateDiv.className = "intermediate-section";
-            intermediateDiv.innerHTML = "<strong>中间推理过程：</strong><br>";
-
-            let finalDiv = document.createElement("div");
-            finalDiv.className = "final-section";
-            finalDiv.innerHTML = "<strong>最终答案：</strong><br>";
-
-            block.appendChild(genericDiv);
-            block.appendChild(intermediateDiv);
-            block.appendChild(finalDiv);
-
-            debugOutput.appendChild(block);
-            currentLogBlock = block;  // 将当前块作为活跃块
-          } else {
-            // 普通 log 消息附加到当前活跃块中的 generic 部分
-            if (!currentLogBlock) {
-              let block = document.createElement("div");
-              block.className = "log-block";
-              currentLogBlock = block;
-              debugOutput.appendChild(block);
-            }
-            let genericDiv = currentLogBlock.querySelector(".generic-log");
-            if (!genericDiv) {
-              genericDiv = document.createElement("div");
-              genericDiv.className = "generic-log";
-              currentLogBlock.appendChild(genericDiv);
-            }
-            let logEntry = document.createElement("div");
-            logEntry.textContent = logData.log;
-            genericDiv.appendChild(logEntry);
+        const logEntry = document.createElement("div");
+        
+        // Get current timestamp
+        const now = new Date();
+        const timestamp = now.toLocaleTimeString('zh-CN', { 
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          fractionalSecondDigits: 3
+        });
+        
+        // Format log based on type
+        if (logData.type === "intermediate" || logData.type === "answer") {
+          // For intermediate/answer logs, check if last log is of same type
+          const lastLog = debugOutput.lastElementChild;
+          if (lastLog && lastLog.getAttribute("data-type") === logData.type) {
+            debugOutput.removeChild(lastLog);
           }
-        } else if (logData.type === "intermediate") {
-          // 更新当前活跃块的中间推理区域（替换之前的内容），而不重复追加
-          if (currentLogBlock) {
-            let intermediateDiv = currentLogBlock.querySelector(".intermediate-section");
-            if (!intermediateDiv) {
-              intermediateDiv = document.createElement("div");
-              intermediateDiv.className = "intermediate-section";
-              currentLogBlock.appendChild(intermediateDiv);
-            }
-            intermediateDiv.innerHTML = "<strong>中间推理过程：</strong><br>" + logData.log;
-          } else {
-            // 若没有当前块，则新建
-            let block = document.createElement("div");
-            block.className = "log-block";
-            let intermediateDiv = document.createElement("div");
-            intermediateDiv.className = "intermediate-section";
-            intermediateDiv.innerHTML = "<strong>中间推理过程：</strong><br>" + logData.log;
-            block.appendChild(intermediateDiv);
-            debugOutput.appendChild(block);
-            currentLogBlock = block;
-          }
-        } else if (logData.type === "final") {
-          // 更新当前活跃块的最终答案区域，仅替换已有内容
-          if (currentLogBlock) {
-            let finalDiv = currentLogBlock.querySelector(".final-section");
-            if (!finalDiv) {
-              finalDiv = document.createElement("div");
-              finalDiv.className = "final-section";
-              currentLogBlock.appendChild(finalDiv);
-            }
-            finalDiv.innerHTML = "<strong>最终答案：</strong><br>" + logData.log;
-          } else {
-            let block = document.createElement("div");
-            block.className = "log-block";
-            let finalDiv = document.createElement("div");
-            finalDiv.className = "final-section";
-            finalDiv.innerHTML = "<strong>最终答案：</strong><br>" + logData.log;
-            block.appendChild(finalDiv);
-            debugOutput.appendChild(block);
-            currentLogBlock = block;
-          }
+          
+          logEntry.innerHTML = `<strong>[${timestamp}] ${logData.type === "intermediate" ? "中间推理过程" : "AI回答"}：</strong><br>${logData.log}`;
         } else {
-          // 其他类型的日志直接作为新行追加
-          const logEntry = document.createElement("div");
-          logEntry.textContent = logData.log;
-          debugOutput.appendChild(logEntry);
+          // For regular logs, just append with timestamp
+          logEntry.innerHTML = `<strong>[${timestamp}] 日志：</strong><br>${logData.log}`;
         }
-        // 自动滚动到底部
-        debugOutput.scrollTop = debugOutput.scrollHeight;
+        
+        // Set data-type attribute for future reference
+        logEntry.setAttribute("data-type", logData.type);
+        
+        // Append log
+        debugOutput.appendChild(logEntry);
       } catch (e) {
         console.error("Error parsing debug log:", e);
       }
@@ -280,49 +229,225 @@
     });
 
     async function loadLevel() {
-      const res = await fetch("/get_level", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId })
-      });
-      const data = await res.json();
-      if (data.game_over) {
-        updateChat("系统：游戏结束，所有关卡均已通过！");
-        document.getElementById("gameSection").style.display = "none";
-        return;
+      // 显示加载中提示
+      const levelImage = document.getElementById("levelImage");
+      const imageSpinner = document.getElementById("imageSpinner");
+      const aiDialogueElem = document.getElementById("aiDialogue");
+      imageSpinner.style.display = "flex";  // 显示加载动画
+      aiDialogueElem.innerText = "加载中...";
+
+      try {
+        const res = await fetch("/get_level", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+        const data = await res.json();
+        document.getElementById("levelTitle").innerText = "关卡 " + data.level_number;
+        document.getElementById("levelDescription").innerText = data.description;
+        document.getElementById("aiRole").innerText = data.ai_role;
+
+        // 检查 level_image 是否为字符串或对象，提取有效的 URL
+        let imgUrl = "";
+        if (typeof data.level_image === "string") {
+          imgUrl = data.level_image;
+        } else if (typeof data.level_image === "object" && data.level_image.url) {
+          imgUrl = data.level_image.url;
+        }
+
+        // 如果返回的是有效 URL（通常以 "http" 开头）则直接设置，否则开始轮询检查更新
+        if (imgUrl.startsWith("http")) {
+            levelImage.src = imgUrl;
+            levelImage.onload = function() {
+                imageSpinner.style.display = "none";
+            };
+        } else {
+            // 占位文本 "图片生成中..." 时启动轮询以获取真实图片 URL
+            pollForImage(sessionId);
+        }
+
+        // 清空 AI 对话区域，随后通过流式接口实时更新
+        aiDialogueElem.innerText = "";
+        // 启动 EventSource 监听流式 AI 对话
+        const dialogueSource = new EventSource("/stream_level_dialogue?session_id=" + sessionId);
+        let currentAIResponse = "";  // 用于累积当前的 AI 回应
+        dialogueSource.onmessage = function(event) {
+           // Clear "加载中" on first token
+           if (currentAIResponse === "") {
+              aiDialogueElem.innerText = "";
+           }
+           // event.data 返回当前 token
+           aiDialogueElem.innerText += event.data;
+           currentAIResponse += event.data;
+        };
+        dialogueSource.onerror = function(err) {
+           console.error("Dialogue stream error:", err);
+           dialogueSource.close();
+           // 当对话完成时，将完整的 AI 回应添加到聊天历史
+           if (currentAIResponse.trim()) {
+             updateChat(`AI (${data.ai_role}): ${currentAIResponse}`);
+             // 更新 session 中的聊天历史
+             fetch("/update_chat_history", {
+               method: "POST",
+               headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({ 
+                 session_id: sessionId, 
+                 message: `AI (${data.ai_role}): ${currentAIResponse}`
+               })
+             }).catch(err => console.error("Failed to update chat history:", err));
+           }
+        };
+
+        // 启用输入框和提交按钮
+        document.getElementById("userResponse").disabled = false;
+        document.getElementById("submitResponseBtn").disabled = false;
+      } catch (err) {
+        console.error(err);
+        aiDialogueElem.innerText = "加载失败";
+        imageSpinner.style.display = "none";
       }
-      document.getElementById("levelTitle").innerText = `关卡 ${data.level_number}`;
-      document.getElementById("levelDescription").innerText = data.description;
-      document.getElementById("levelImage").src = data.level_image;
-      document.getElementById("aiRole").innerText = data.ai_role;
-      document.getElementById("aiDialogue").innerText = data.ai_dialogue;
     }
 
-    document.getElementById("submitResponseBtn").addEventListener("click", async () => {
+    async function pollForImage(sessionId) {
+        const levelImage = document.getElementById("levelImage");
+        const imageSpinner = document.getElementById("imageSpinner");
+        try {
+            const res = await fetch("/get_level", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ session_id: sessionId })
+            });
+            const data = await res.json();
+            let imgUrl = "";
+            if (typeof data.level_image === "string") {
+                imgUrl = data.level_image;
+            } else if (typeof data.level_image === "object" && data.level_image.url) {
+                imgUrl = data.level_image.url;
+            }
+            // 检查是否为有效的图片 URL（以 http 开头且不是之前失败的 URL）
+            if (imgUrl.startsWith("http") && imgUrl !== levelImage.src) {
+                // 设置新的图片 URL
+                levelImage.src = imgUrl;
+                // 添加图片加载事件处理
+                levelImage.onload = function() {
+                    imageSpinner.style.display = "none";
+                };
+                levelImage.onerror = function() {
+                    console.error("Failed to load image:", imgUrl);
+                    // 图片加载失败时继续轮询
+                    setTimeout(() => pollForImage(sessionId), 3000);
+                };
+            } else {
+                // 未生成有效图片时，3秒后继续轮询
+                setTimeout(() => pollForImage(sessionId), 3000);
+            }
+        } catch (err) {
+            console.error("Error polling image:", err);
+            setTimeout(() => pollForImage(sessionId), 3000);
+        }
+    }
+
+    async function submitResponse() {
       const userResponse = document.getElementById("userResponse").value.trim();
       if (!userResponse) {
         alert("请输入你的回应！");
         return;
       }
+      
+      // 禁用输入框和按钮，显示加载动画
+      const submitBtn = document.getElementById("submitResponseBtn");
+      const userInput = document.getElementById("userResponse");
+      const buttonText = submitBtn.querySelector(".button-text");
+      const loadingSpinner = submitBtn.querySelector(".loading-spinner");
+      
+      submitBtn.disabled = true;
+      userInput.disabled = true;
+      buttonText.style.display = "none";
+      loadingSpinner.style.display = "inline";
+      
       const res = await fetch("/submit_response", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, user_response: userResponse })
       });
       const data = await res.json();
+      
+      // 恢复按钮状态
+      buttonText.style.display = "inline";
+      loadingSpinner.style.display = "none";
+      
+      // 添加用户回应和系统评价到聊天历史
       updateChat(`用户：${userResponse}`);
       updateChat(`系统评价：${data.evaluation_feedback}`);
+      
       document.getElementById("evaluationFeedback").innerText = data.message;
       document.getElementById("userResponse").value = "";
+      const aiDialogueElem = document.getElementById("aiDialogue");
+      aiDialogueElem.innerText = "";  // 清空当前的 AI 对话
+      
       if (data.passed) {
         // 延时加载下一关卡
         setTimeout(loadLevel, 1500);
+      } else {
+        // 如果未通过，重新获取 AI 对话
+        aiDialogueElem.innerText = "加载中...";
+        
+        // 启动新的 EventSource 获取流式对话
+        const dialogueSource = new EventSource("/stream_level_dialogue?session_id=" + sessionId);
+        let currentAIResponse = "";  // 用于累积当前的 AI 回应
+        dialogueSource.onmessage = function(event) {
+          // Clear "加载中" on first token
+          if (currentAIResponse === "") {
+             aiDialogueElem.innerText = "";
+          }
+          // event.data 返回当前 token
+          aiDialogueElem.innerText += event.data;
+          currentAIResponse += event.data;
+        };
+        
+        dialogueSource.onerror = function(err) {
+          console.error("Dialogue stream error:", err);
+          dialogueSource.close();
+          // 当对话完成时，将完整的 AI 回应添加到聊天历史
+          if (currentAIResponse.trim()) {
+            updateChat(`AI (${document.getElementById("aiRole").innerText}): ${currentAIResponse}`);
+            // 更新 session 中的聊天历史
+            fetch("/update_chat_history", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ 
+                session_id: sessionId, 
+                message: `AI (${document.getElementById("aiRole").innerText}): ${currentAIResponse}`
+              })
+            }).catch(err => console.error("Failed to update chat history:", err));
+          }
+          // 对话加载完成后启用输入
+          submitBtn.disabled = false;
+          userInput.disabled = false;
+        };
+      }
+    }
+
+    // 点击提交按钮时提交回应
+    document.getElementById("submitResponseBtn").addEventListener("click", submitResponse);
+    
+    // 在输入框中按回车键时提交回应
+    document.getElementById("userResponse").addEventListener("keypress", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        submitResponse();
       }
     });
 
     function updateChat(message) {
       const chatDiv = document.getElementById("chatHistory");
-      chatDiv.innerHTML += `<p>${message}</p>`;
+      // 使用 pre 标签保持格式，并添加样式
+      const messageElem = document.createElement("pre");
+      messageElem.style.margin = "5px 0";
+      messageElem.style.whiteSpace = "pre-wrap";
+      messageElem.style.wordWrap = "break-word";
+      messageElem.textContent = message;
+      chatDiv.appendChild(messageElem);
       chatDiv.scrollTop = chatDiv.scrollHeight;
     }
   </script>

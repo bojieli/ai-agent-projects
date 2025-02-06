@@ -8,6 +8,7 @@ import os
 import sys
 from queue import Queue
 import asyncio
+import re
 
 app = Flask(__name__, static_folder="../frontend", static_url_path="")
 
@@ -54,25 +55,31 @@ def robust_json_parse(text):
     try:
         return json.loads(text)
     except Exception as e:
-        # 尝试提取 JSON 部分：去除 markdown 格式（如 ```）和多余说明
-        try:
-            stripped = text.strip()
-            if stripped.startswith("```"):
-                const_lines = stripped.splitlines()
-                if len(const_lines) >= 3:
-                    stripped = "\n".join(const_lines[1:-1])
-            if "{" in stripped and "}" in stripped:
-                start = stripped.index("{")
-                end = stripped.rindex("}") + 1
-                possible_json = stripped[start:end]
-                return json.loads(possible_json)
-            elif "[" in stripped and "]" in stripped:
-                start = stripped.index("[")
-                end = stripped.rindex("]") + 1
-                possible_json = stripped[start:end]
-                return json.loads(possible_json)
-        except Exception as e2:
-            print("robust_json_parse failed:", e, e2)
+        # 尝试使用正则表达式提取 markdown code block 中的 JSON 内容
+        m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
+        if m:
+            json_text = m.group(1)
+            try:
+                return json.loads(json_text)
+            except Exception as e2:
+                print("Failed parsing after extracting code block:", e2)
+        # 若正则提取不成功，则尝试手动查找 JSON 数组或对象
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            const_lines = stripped.splitlines()
+            if len(const_lines) >= 3:
+                stripped = "\n".join(const_lines[1:-1])
+        for char in ['{', '[']:
+            if char in stripped:
+                try:
+                    end_char = "}" if char == "{" else "]"
+                    start = stripped.index(char)
+                    end = stripped.rindex(end_char) + 1
+                    possible_json = stripped[start:end]
+                    return json.loads(possible_json)
+                except Exception as e3:
+                    continue
+        print("robust_json_parse failed:", e)
         raise e
 
 # 加载 stories.json 中的故事数据
@@ -80,19 +87,96 @@ stories_path = os.path.join(os.path.dirname(__file__), "stories.json")
 with open(stories_path, "r", encoding="utf-8") as f:
     stories_data = json.load(f)
 
+async def generate_text_async_stream(prompt, model):
+    """Streaming version that yields tokens"""
+    if model == "deepseek-ai/DeepSeek-R1":
+        providers = ["doubao", "siliconflow", "deepseek_official"]
+        last_exception = None
+        for provider in providers:
+            try:
+                if provider == "doubao":
+                    async for token in try_provider_doubao_stream(prompt, model="ep-20250206131705-gtthc"):
+                        yield token
+                    return
+                elif provider == "siliconflow":
+                    payload = {
+                        "model": "deepseek-ai/DeepSeek-R1",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": True,
+                        "max_tokens": 8192,
+                    }
+                    headers = {
+                        "Authorization": "Bearer " + API_TOKEN,
+                        "Content-Type": "application/json"
+                    }
+                    async for token in try_provider_http_stream(TEXT_GEN_URL, payload, headers):
+                        yield token
+                    return
+                elif provider == "deepseek_official":
+                    payload = {
+                        "model": "deepseek-ai/DeepSeek-R1",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": True,
+                        "max_tokens": 8192,
+                    }
+                    payload["model"] = "deepseek-reasoner"
+                    headers = {
+                        "Authorization": "Bearer " + DEEPSEEK_API_KEY,
+                        "Content-Type": "application/json"
+                    }
+                    async for token in try_provider_http_stream("https://api.deepseek.com/v1/chat/completions", payload, headers):
+                        yield token
+                    return
+            except Exception as e:
+                last_exception = e
+                debug_log(f"Provider {provider} failed: {e}", "log")
+        raise Exception("All providers failed for deepseek-ai/DeepSeek-R1: " + str(last_exception))
+    elif model == "deepseek-ai/DeepSeek-V3":
+        try:
+            async for token in try_provider_doubao_stream(prompt, model="ep-20250206203431-bql9h"):
+                yield token
+            return
+        except Exception as e:
+            debug_log(f"Doubao provider failed for DeepSeek V3: {e}", "log")
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "max_tokens": 4096,
+            }
+            headers = {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Content-Type": "application/json"
+            }
+            async for token in try_provider_http_stream(TEXT_GEN_URL, payload, headers):
+                yield token
+    else:
+        raise ValueError(f"不支持的模型: {model}")
+
+async def generate_text_async(prompt, model):
+    """Non-streaming version that returns the complete response"""
+    final_result = ""
+    async for token in generate_text_async_stream(prompt, model):
+        final_result += token
+    return {"content": final_result.strip(), "intermediate_reasoning": ""}
+
 def generate_text(prompt, model=None):
     if model is None:
         model = "deepseek-ai/DeepSeek-V3"
     return asyncio.run(generate_text_async(prompt, model))
 
-async def try_provider_http(api_url, payload, headers):
+async def try_provider_http_stream(api_url, payload, headers):
+    """Stream version that yields tokens"""
     final_result = ""
     accumulated_intermediate = ""
     first_chunk_received = False
     start_time = asyncio.get_running_loop().time()
+    first_token_time = None
+    token_count = 0
+
     async with httpx.AsyncClient(timeout=None) as client:
         async with client.stream("POST", api_url, json=payload, headers=headers) as response:
-            debug_log("HTTP响应状态码: " + str(response.status_code))
+            debug_log("HTTP响应状态码: " + str(response.status_code) + " " + api_url)
             if response.status_code == 400:
                 error_body = await response.aread()
                 raise Exception("HTTP 400: " + error_body.decode())
@@ -118,16 +202,44 @@ async def try_provider_http(api_url, payload, headers):
                                 accumulated_intermediate += message_delta["reasoning_content"]
                                 debug_log(accumulated_intermediate, "intermediate")
                             if message_delta.get("content"):
-                                final_result += message_delta["content"]
-                                debug_log(final_result, "final")
+                                token = message_delta["content"]
+                                final_result += token
+                                token_count += 1
+
+                                # Record first token time and TTFT
+                                if first_token_time is None:
+                                    first_token_time = asyncio.get_running_loop().time()
+                                    ttft = first_token_time - start_time
+                                    debug_log(f"TTFT: {ttft:.3f}s", "log")
+
+                                debug_log(final_result, "answer")
+                                yield token
                     except Exception as e:
                         debug_log("Error parsing delta: " + str(e) + ". Full response: " + line)
+
+    # Calculate and log metrics
+    end_time = asyncio.get_running_loop().time()
+    total_latency = end_time - start_time
+    if first_token_time and token_count > 0:
+        tpot = (end_time - first_token_time) / token_count
+        debug_log(
+            f"Metrics - Total tokens: {token_count}, TPOT: {tpot:.3f}s/token, Total latency: {total_latency:.3f}s", 
+            "log"
+        )
+    else:
+        debug_log(f"Metrics - Total latency: {total_latency:.3f}s", "log")
+
+async def try_provider_http(api_url, payload, headers):
+    """Non-stream version that returns the complete response"""
+    final_result = ""
+    accumulated_intermediate = ""
+    async for token in try_provider_http_stream(api_url, payload, headers):
+        final_result += token
     return {"content": final_result.strip(), "intermediate_reasoning": accumulated_intermediate}
 
-async def try_provider_doubao(prompt):
-    # 使用与 siliconflow 相同的 prompt 格式, 但采用豆包专用 model 和 API URL
+async def try_provider_doubao_stream(prompt, model):
     payload = {
-         "model": "ep-20250206131705-gtthc",
+         "model": model,
          "messages": [
              {"role": "user", "content": prompt}
          ],
@@ -139,94 +251,39 @@ async def try_provider_doubao(prompt):
          "Content-Type": "application/json"
     }
     api_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-    # 调用异步 HTTP 请求接口，TTFT 检查由 try_provider_http 处理
-    result = await try_provider_http(api_url, payload, headers)
-    debug_log("Doubao provider succeeded", "log")
-    return result
+    async for token in try_provider_http_stream(api_url, payload, headers):
+        yield token
 
-async def generate_text_async(prompt, model):
-    # 若请求 deepseek R1（初始生成），采用多供应商顺序
-    if model == "deepseek-ai/DeepSeek-R1":
-         providers = ["doubao", "siliconflow", "deepseek_official"]
-         last_exception = None
-         for provider in providers:
-             try:
-                 if provider == "doubao":
-                     result = await try_provider_doubao(prompt)
-                     debug_log("Doubao provider succeeded", "log")
-                     return result
-                 elif provider == "siliconflow":
-                     # siliconflow 使用默认 TEXT_GEN_URL 与 API_TOKEN
-                     payload = {
-                         "model": "deepseek-ai/DeepSeek-R1",
-                         "messages": [{"role": "user", "content": prompt}],
-                         "stream": True,
-                         "max_tokens": 8192,
-                     }
-                     headers = {
-                         "Authorization": "Bearer " + API_TOKEN,
-                         "Content-Type": "application/json"
-                     }
-                     result = await try_provider_http(TEXT_GEN_URL, payload, headers)
-                     debug_log("Siliconflow provider succeeded", "log")
-                     return result
-                 elif provider == "deepseek_official":
-                     payload = {
-                         "model": "deepseek-ai/DeepSeek-R1",
-                         "messages": [{"role": "user", "content": prompt}],
-                         "stream": True,
-                         "max_tokens": 8192,
-                     }
-                     payload["model"] = "deepseek-reasoner"
-                     headers = {
-                         "Authorization": "Bearer " + DEEPSEEK_API_KEY,
-                         "Content-Type": "application/json"
-                     }
-                     result = await try_provider_http("https://api.deepseek.com/v1/chat/completions", payload, headers)
-                     debug_log("DeepSeek official provider succeeded", "log")
-                     return result
-             except Exception as e:
-                 last_exception = e
-                 debug_log(f"Provider {provider} failed: {e}", "log")
-         raise Exception("All providers failed for deepseek-ai/DeepSeek-R1: " + str(last_exception))
-    else:
-         # 对于其它模型（如 deepseek-ai/DeepSeek-V3），直接走 siliconflow
-         payload = {
-             "model": model,
-             "messages": [{"role": "user", "content": prompt}],
-             "stream": True,
-             "max_tokens": 8192,
-         }
-         headers = {
-             "Authorization": "Bearer " + API_TOKEN,
-             "Content-Type": "application/json"
-         }
-         return await try_provider_http(TEXT_GEN_URL, payload, headers)
+async def try_provider_doubao(prompt, model):
+    """Non-stream version that returns the complete response"""
+    final_result = ""
+    async for token in try_provider_doubao_stream(prompt, model):
+        final_result += token
+    return {"content": final_result.strip(), "intermediate_reasoning": ""}
 
-
-def generate_image(prompt, seed=4999999999):
+def generate_image(prompt):
+    """
+    调用图片生成 API，根据生成响应提取第一张图片的 URL。
+    """
     payload = {
-        "model": "deepseek-ai/Janus-Pro-7B",
-        "prompt": prompt,
-        "seed": seed
+         "model": "deepseek-ai/Janus-Pro-7B",
+         "prompt": prompt,
+         "seed": random.randint(0, 9999999999)
     }
     headers = {
-        "Authorization": "Bearer " + API_TOKEN,
-        "Content-Type": "application/json"
+         "Authorization": "Bearer " + API_TOKEN,
+         "Content-Type": "application/json"
     }
-    debug_log("发送图片生成请求: " + json.dumps(payload, ensure_ascii=False))
-    try:
-        response = requests.post(IMAGE_GEN_URL, json=payload, headers=headers)
-        debug_log("收到图片生成响应: " + response.text)
-        response.raise_for_status()
-        data = response.json()
-        image_url = data.get("url", "暂无图片")
-        debug_log("生成图片 URL: " + image_url)
-        return image_url
-    except Exception as e:
-        debug_log("图片生成 API 调用失败: " + str(e))
-        print("图片生成 API 调用失败：", e)
-        return "暂无图片"
+    response = requests.post(IMAGE_GEN_URL, json=payload, headers=headers)
+    if response.status_code == 200:
+         result = response.json()
+         images = result.get("images", [])
+         if images and isinstance(images, list) and images[0].get("url"):
+              return images[0]["url"]
+         else:
+              return "暂无图片"
+    else:
+         return "暂无图片"
 
 
 def text_to_speech(text, voice="fishaudio/fish-speech-1.5:alex"):
@@ -362,15 +419,17 @@ def generate_levels(chapter_text, extracted_info=None):
 
 def evaluate_level(pass_condition, user_response, chat_history, overall_plot):
     prompt = (
-        f"请根据以下关卡通关条件判断用户的回答是否满足要求。\n"
+        f"请严格根据以下关卡通关条件判断用户的回答是否满足要求。用户的回答必须明确体现出完成了通关条件中描述的任务。\n"
         f"关卡通关条件：{pass_condition}\n"
         f"用户回答：{user_response}\n"
         f"整体剧情：{overall_plot}\n"
         f"聊天记录：{chat_history}\n"
-        "请直接回复\"通过\"或\"未通过\"。"
+        "请仔细分析用户回答是否确实完成了通关条件要求的任务。如果用户回答过于简单或模糊，不能明确判断是否完成任务，则应该判定为未通过。\n"
+        "请直接回复\"通过\"或\"未通过\"，不要包含其他内容。"
     )
     result = generate_text(prompt)
-    if "通过" in result["content"]:
+    # 严格匹配完整的"通过"二字
+    if result["content"].strip() == "通过":
         return True, result["content"]
     else:
         return False, result["content"]
@@ -447,31 +506,65 @@ def get_level():
     if current_index >= len(levels):
         return jsonify({"message": "游戏结束", "game_over": True})
 
-    level = levels[current_index]
-    overall_plot = session["overall_plot"]
-    chat_history = session["chat_history"]
+    level = levels[current_index]  # 先获取当前关卡
+    
+    # 获取 AI 角色
     user_role = session["user_role"]
-
     available_roles = [c for c in session["characters"] if c['name'] != user_role]
     ai_role = random.choice(available_roles)["name"] if available_roles else "旁白"
     
-    dialogue_prompt = (
-        f"请以{ai_role}的身份，根据整体剧情和关卡描述进行发言，引导用户进行互动。\n"
-        f"整体剧情：{overall_plot}\n关卡描述：{level.get('description')}\n"
-        "请发表一句话。"
-    )
-    ai_dialogue = generate_text(dialogue_prompt)
+    # 检查是否已经生成过图片
+    if "level_images" not in session:
+        session["level_images"] = {}
     
-    level_image_prompt = f"根据关卡描述生成一张背景图片的描述。描述：{level.get('description')}"
-    level_image = generate_image(level_image_prompt)
+    # 先检查 stories.json 中是否有缓存的图片
+    for story in stories_data.get("stories", []):
+        if "generated_levels" in story and len(story["generated_levels"]) > current_index:
+            cached_level = story["generated_levels"][current_index]
+            if "level_image" in cached_level and cached_level["level_image"].startswith("http"):
+                level["level_image"] = cached_level["level_image"]
+                session["level_images"][current_index] = cached_level["level_image"]
+                return jsonify({
+                    "level_number": level.get("level"),
+                    "description": level.get("description"),
+                    "pass_condition": level.get("pass_condition"),
+                    "level_image": level["level_image"],
+                    "ai_role": ai_role,
+                    "game_over": False
+                })
     
+    # 如果已经生成过图片，直接返回缓存的图片 URL
+    if current_index in session["level_images"]:
+        level["level_image"] = session["level_images"][current_index]
+    else:
+        # 异步生成图片
+        level_image_prompt = f"根据关卡描述生成一张背景图片的描述。描述：{level.get('description')}"
+        level["level_image"] = "图片生成中..."
+        import threading
+        def generate_image_background(level, prompt, session, current_index):
+             image_url = generate_image(prompt)
+             level["level_image"] = image_url
+             # 保存生成的图片 URL 到会话中
+             session["level_images"][current_index] = image_url
+             # 同时保存到 stories.json 中
+             for story in stories_data.get("stories", []):
+                 if "generated_levels" in story and len(story["generated_levels"]) > current_index:
+                     story["generated_levels"][current_index]["level_image"] = image_url
+                     with open(stories_path, "w", encoding="utf-8") as f:
+                         json.dump(stories_data, f, ensure_ascii=False, indent=2)
+             debug_log("图片生成完成，URL: " + image_url)
+        threading.Thread(
+            target=generate_image_background,
+            args=(level, level_image_prompt, session, current_index),
+            daemon=True
+        ).start()
+
     return jsonify({
         "level_number": level.get("level"),
         "description": level.get("description"),
         "pass_condition": level.get("pass_condition"),
-        "level_image": level_image,
+        "level_image": level["level_image"],
         "ai_role": ai_role,
-        "ai_dialogue": ai_dialogue,
         "game_over": False
     })
 
@@ -502,16 +595,15 @@ def submit_response():
         overall_plot
     )
     
-    session["chat_history"] += (
-        f"\n关卡 {level.get('level')} AI发言：{evaluation_feedback}\n"
-        f"用户响应：{user_response}\n"
-    )
+    # 记录用户回应到聊天历史
+    session["chat_history"] += f"\n用户：{user_response}\n"
+    session["chat_history"] += f"系统评价：{evaluation_feedback}\n"
     
     if passed:
         session["current_level_index"] += 1
         message = f"恭喜，你通过了关卡 {level.get('level')}！"
     else:
-        message = "关卡未通过，请重新尝试。"
+        message = "关卡未通过，请继续尝试。"
 
     return jsonify({
         "passed": passed,
@@ -531,23 +623,111 @@ def random_story():
         return jsonify({"error": "没有找到故事"}), 404
 
 
+@app.route("/stream_level_dialogue", methods=["GET"])
+def stream_level_dialogue():
+    """
+    流式返回当前关卡的 AI 对话，每个 token 以 SSE 格式发送。
+    调用文本生成 API，并实时提取对话 token。
+    """
+    session_id = request.args.get("session_id")
+    if not session_id or session_id not in sessions:
+        return Response("data: 无效的 session_id\n\n", mimetype="text/event-stream")
+
+    session = sessions[session_id]
+    current_index = session["current_level_index"]
+    levels = session["levels"]
+
+    if current_index >= len(levels):
+        return Response("data: 游戏结束\n\n", mimetype="text/event-stream")
+
+    level = levels[current_index]
+    overall_plot = session["overall_plot"]
+    chat_history = session["chat_history"]
+    user_role = session["user_role"]
+    available_roles = [c for c in session["characters"] if c['name'] != user_role]
+    ai_role = random.choice(available_roles)["name"] if available_roles else "旁白"
+
+    dialogue_prompt = (
+        f"请以{ai_role}的身份，根据整体剧情、关卡描述和聊天历史，对用户的回答进行回应并引导用户继续尝试。\n"
+        f"整体剧情：{overall_plot}\n"
+        f"关卡描述：{level.get('description')}\n"
+        f"通关条件：{level.get('pass_condition')}\n"
+        f"聊天历史：=== BEGIN CHAT HISTORY ===\n{chat_history if chat_history else '无'}\n=== END CHAT HISTORY ===\n"
+        "请发表一句话。"
+    )
+
+    # 记录 AI 请求的 prompt 到调试日志
+    debug_log("stream_level_dialogue:\n" + dialogue_prompt, "log")
+
+    async def generate_stream():
+        async for token in generate_text_async_stream(dialogue_prompt, "deepseek-ai/DeepSeek-V3"):
+            yield f"data: {token}\n\n"
+
+    gen = generate_stream()
+    return Response(
+         sync_generate_stream(gen),
+         mimetype="text/event-stream",
+         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
 @app.route("/list_stories", methods=["GET"])
 def list_stories():
     stories_list = []
     for story in stories_data.get("stories", []):
-        content = story.get("content", "")
-        title = story.get("title", "").strip() or "无标题"
-        author = story.get("author", "").strip() or "未知作者"
-        excerpt = content[:50] + ("..." if len(content) > 50 else "")
-        stories_list.append({
-            "id": len(stories_list),  # Use current index as id
-            "title": title,
-            "author": author,
-            "excerpt": excerpt,
-            "content": content,
-            "generated": "extracted_info" in story
-        })
+         content = story.get("content", "")
+         title = story.get("title", "").strip() or "无标题"
+         author = story.get("author", "").strip() or "未知作者"
+         excerpt = content[:50] + ("..." if len(content) > 50 else "")
+         stories_list.append({
+             "id": len(stories_list),  # Use current index as id
+             "title": title,
+             "author": author,
+             "excerpt": excerpt,
+             "content": content,
+             "generated": "extracted_info" in story
+         })
     return jsonify(stories_list)
+
+
+def sync_generate_stream(async_gen):
+    """
+    将异步生成器 async_gen 转换为同步生成器，以便通过 WSGI 服务器流式发送。
+    """
+    from queue import Queue
+    import threading
+    q = Queue()
+
+    def run():
+        async def main():
+            async for token in async_gen:
+                q.put(token)
+        asyncio.run(main())
+        q.put(None)
+
+    threading.Thread(target=run, daemon=True).start()
+    while True:
+        token = q.get()
+        if token is None:
+            break
+        yield token
+
+
+@app.route("/update_chat_history", methods=["POST"])
+def update_chat_history():
+    data = request.get_json()
+    session_id = data.get("session_id")
+    message = data.get("message")
+    
+    if not session_id or session_id not in sessions:
+        return jsonify({"error": "无效的 session_id"}), 400
+        
+    if not message:
+        return jsonify({"error": "消息不能为空"}), 400
+        
+    session = sessions[session_id]
+    session["chat_history"] += f"\n{message}\n"
+    
+    return jsonify({"message": "聊天历史更新成功"})
 
 
 if __name__ == "__main__":
