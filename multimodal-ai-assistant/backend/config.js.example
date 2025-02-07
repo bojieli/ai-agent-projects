@@ -1,0 +1,13 @@
+const config = {
+  OPENAI_API_KEY: '<your-openai-api-key>',
+  LLM_MODEL: '<your-llm-model>',
+  LLM_API_URL: '<your-llm-api-url>',
+  ASR_WEBSOCKET_URL: 'ws://localhost:8099/api/transcribe_streaming_wav',
+  TTS_API_URL: 'https://api.siliconflow.cn/v1/audio/speech',
+  SILICONFLOW_API_KEY: '<your-siliconflow-api-key>',
+  LISTEN_PORT: 8848,
+  LISTEN_HOST: '0.0.0.0',
+  SYSTEM_PROMPT: 'You are a helpful AI assistant.',
+  CANCEL_PLAYBACK_TIME_THRESHOLD: 3000,
+};
+module.exports = config;
