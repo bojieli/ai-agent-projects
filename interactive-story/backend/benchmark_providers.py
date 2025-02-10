@@ -107,10 +107,10 @@ async def benchmark_provider(name, api_url, payload, headers):
 
 async def main():
     # Load environment variables
-    API_TOKEN = os.environ.get("API_TOKEN")
+    SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY")
     ARK_API_KEY = os.environ.get("ARK_API_KEY")
     
-    if not API_TOKEN or not ARK_API_KEY:
+    if not SILICONFLOW_API_KEY or not ARK_API_KEY:
         print("Error: Required environment variables not set")
         sys.exit(1)
 
@@ -171,7 +171,7 @@ async def main():
                 "max_tokens": 4096,
             },
             "headers": {
-                "Authorization": f"Bearer {API_TOKEN}",
+                "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
                 "Content-Type": "application/json"
             }
         }

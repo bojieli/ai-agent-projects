@@ -34,9 +34,9 @@ def debug_stream():
     return Response(event_stream(), mimetype="text/event-stream")
 
 # 配置 API Token 和各 API URL
-API_TOKEN = os.environ.get("API_TOKEN")
-if not API_TOKEN or API_TOKEN == "<token>":
-    print("错误: API_TOKEN 环境变量未设置或未正确配置。请设置 API_TOKEN 环境变量！")
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY")
+if not SILICONFLOW_API_KEY or SILICONFLOW_API_KEY == "<token>":
+    print("错误: SILICONFLOW_API_KEY 环境变量未设置或未正确配置。请设置 SILICONFLOW_API_KEY 环境变量！")
     sys.exit(1)
 
 ## 引入官方 DeepSeek R1 API 的密钥
@@ -106,7 +106,7 @@ async def generate_text_async_stream(prompt, model):
                         "max_tokens": 8192,
                     }
                     headers = {
-                        "Authorization": "Bearer " + API_TOKEN,
+                        "Authorization": "Bearer " + SILICONFLOW_API_KEY,
                         "Content-Type": "application/json"
                     }
                     async for token in try_provider_http_stream(TEXT_GEN_URL, payload, headers):
@@ -145,7 +145,7 @@ async def generate_text_async_stream(prompt, model):
                 "max_tokens": 4096,
             }
             headers = {
-                "Authorization": "Bearer " + API_TOKEN,
+                "Authorization": "Bearer " + SILICONFLOW_API_KEY,
                 "Content-Type": "application/json"
             }
             async for token in try_provider_http_stream(TEXT_GEN_URL, payload, headers):
@@ -271,7 +271,7 @@ def generate_image(prompt):
          "seed": random.randint(0, 9999999999)
     }
     headers = {
-         "Authorization": "Bearer " + API_TOKEN,
+         "Authorization": "Bearer " + SILICONFLOW_API_KEY,
          "Content-Type": "application/json"
     }
     response = requests.post(IMAGE_GEN_URL, json=payload, headers=headers)
@@ -298,7 +298,7 @@ def text_to_speech(text, voice="fishaudio/fish-speech-1.5:alex"):
         "gain": 0
     }
     headers = {
-        "Authorization": "Bearer " + API_TOKEN,
+        "Authorization": "Bearer " + SILICONFLOW_API_KEY,
         "Content-Type": "application/json"
     }
     try:
@@ -316,7 +316,7 @@ def transcribe_audio(file_path):
         'model': (None, 'FunAudioLLM/SenseVoiceSmall')
     }
     headers = {
-        "Authorization": "Bearer " + API_TOKEN
+        "Authorization": "Bearer " + SILICONFLOW_API_KEY
     }
     try:
         response = requests.post(TRANSCRIPTION_URL, files=files, headers=headers)
