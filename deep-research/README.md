@@ -74,5 +74,4 @@ OPENAI_API_KEY=sk-your-key
 GOOGLE_API_KEY=your-google-key
 SEARCH_ENGINE_ID=your-engine-id
 MAX_CONCURRENT_THREADS=5
-LLM_TEMPERATURE=0.3
 ```

@@ -3,14 +3,21 @@ import os
 from typing import Dict, List
 import json
 from datetime import datetime
+from utils.text_generation import TextGenerator
 
 class ReportGenerator:
     def __init__(self, config):
-        self.client = OpenAI(api_key=config.openai_key)
-        self.temperature = config.llm_temperature
+        self.text_gen = TextGenerator(
+            api_token=config.openai_key,
+            deepseek_api_key=config.deepseek_key,
+            siliconflow_key=config.siliconflow_key,
+            ark_key=config.ark_key
+        )
         
-    def generate_report(self, analyzed_data: Dict, output_dir: str):
+    def generate_report(self, analyzed_data: Dict, output_path: str):
         """Generate full research report with progress tracking"""
+        # Create output directory if it doesn't exist
+        output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
         
         # Generate outline
@@ -30,7 +37,7 @@ class ReportGenerator:
             
         # Combine and save final report
         final_report = self._combine_sections(report_content)
-        self._save_report(final_report, output_dir)
+        self._save_report(final_report, output_path)
         
     def _init_progress(self, progress_file: str, sections: List[Dict]):
         progress = {
@@ -51,10 +58,9 @@ class ReportGenerator:
     def _combine_sections(self, sections: List[str]) -> str:
         return "\n\n".join(sections)
         
-    def _save_report(self, content: str, output_dir: str):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = os.path.join(output_dir, f'research_report_{timestamp}.md')
-        with open(report_path, 'w') as f:
+    def _save_report(self, content: str, output_path: str):
+        """Save the report content to the specified path"""
+        with open(output_path, 'w') as f:
             f.write(content)
         
     def generate_outline(self, research_data: Dict) -> Dict:
@@ -94,10 +100,10 @@ Output as JSON with structure:
         
         return self._get_completion(prompt)
         
-    def _get_completion(self, prompt):
-        response = self.client.chat.completions.create(
-            model="o3-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=self.temperature
-        )
-        return response.choices[0].message.content 
+    def _get_completion(self, prompt: str) -> str:
+        """Get completion using DeepSeek-R1"""
+        try:
+            result = self.text_gen.generate_text_sync(prompt)
+            return result["content"]
+        except Exception as e:
+            raise ValueError(f"Text generation failed: {str(e)}") 

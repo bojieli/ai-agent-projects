@@ -8,10 +8,12 @@ class Config:
     openai_key: str
     google_key: str
     search_engine_id: str
+    deepseek_key: str
+    siliconflow_key: str
+    ark_key: str
     output_dir: str
     cache_dir: str
     max_threads: int
-    llm_temperature: float
     crawl_timeout: int
 
     @classmethod
@@ -23,10 +25,12 @@ class Config:
             openai_key=os.getenv('OPENAI_API_KEY'),
             google_key=os.getenv('GOOGLE_API_KEY'),
             search_engine_id=os.getenv('SEARCH_ENGINE_ID'),
+            deepseek_key=os.getenv('DEEPSEEK_API_KEY'),
+            siliconflow_key=os.getenv('SILICONFLOW_API_KEY'),
+            ark_key=os.getenv('ARK_API_KEY'),
             output_dir=os.getenv('OUTPUT_DIR', './reports'),
             cache_dir=os.getenv('CACHE_DIR', './.cache'),
             max_threads=int(os.getenv('MAX_CONCURRENT_THREADS', '5')),
-            llm_temperature=float(os.getenv('LLM_TEMPERATURE', '0.3')),
             crawl_timeout=int(os.getenv('CRAWL_TIMEOUT', '30'))
         )
 
@@ -35,7 +39,10 @@ class Config:
         required = {
             'OPENAI_API_KEY': self.openai_key,
             'GOOGLE_API_KEY': self.google_key,
-            'SEARCH_ENGINE_ID': self.search_engine_id
+            'SEARCH_ENGINE_ID': self.search_engine_id,
+            'DEEPSEEK_API_KEY': self.deepseek_key,
+            'SILICONFLOW_API_KEY': self.siliconflow_key,
+            'ARK_API_KEY': self.ark_key
         }
         
         missing = [key for key, value in required.items() if not value]

@@ -59,6 +59,11 @@ class ResearchPlanner:
         
     def _create_planning_prompt(self, query: str) -> str:
         return f"""Create a detailed research execution plan for: {query}
+        
+        Important requirements:
+        1. All responses must be in the same language as the query
+        2. Search queries must be carefully crafted to avoid irrelevant results
+        
         Output a JSON object with the following structure:
         {{
             "primary_search_queries": ["query1", "query2"...],
@@ -68,7 +73,8 @@ class ResearchPlanner:
             "analysis_steps": [
                 {{"step": "step_description", "priority": 1-5}}
             ],
-            "expected_sources": ["academic_papers", "news_articles", "expert_blogs"...]
+            "expected_sources": ["academic_papers", "news_articles", "expert_blogs"...],
+            "response_language": "detected_language_of_query"
         }}"""
 
     def _validate_plan(self, plan: Dict) -> Dict:

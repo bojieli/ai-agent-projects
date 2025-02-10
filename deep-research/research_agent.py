@@ -15,6 +15,7 @@ from utils.progress_display import ResearchProgress
 from datetime import datetime
 from rich.console import Console
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import traceback
 
 class ResearchAgent:
     def __init__(self, config: Config):
@@ -50,6 +51,7 @@ class ResearchAgent:
         
     def execute(self, query: str, output_dir: str):
         """Execute research with recovery support"""
+        context = None
         try:
             # Initialize or recover context
             self.progress.update("Initializing research context")
@@ -73,7 +75,15 @@ class ResearchAgent:
             
             # Generate report
             self.progress.update("Generating report", "Creating final research document")
-            output_path = os.path.join(output_dir, f"research_report_{datetime.now():%Y%m%d_%H%M%S}.md")
+            # Get response language from plan
+            response_language = plan.get('response_language', 'en')
+            # Create language-specific folder name
+            folder_name = "research_report"
+            if response_language != 'en':
+                folder_name = f"{folder_name}_{response_language}"
+            output_path = os.path.join(output_dir, folder_name, f"{datetime.now():%Y%m%d_%H%M%S}")
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             self.report_gen.generate_report(analyzed_data, output_path)
             self.logger.info("Report generation completed")
             
@@ -83,9 +93,18 @@ class ResearchAgent:
             self.progress.complete(output_path)
             
         except Exception as e:
-            self.logger.error(f"Research failed: {str(e)}")
-            self.progress.show_error(e)
-            self._handle_failure(context, e)
+            error_context = f"Step: {self.progress.current_step}"
+            if self.progress.current_details:
+                error_context += f"\nDetails: {self.progress.current_details}"
+                
+            self.logger.error(
+                f"Research failed: {str(e)}\n"
+                f"Context: {error_context}\n"
+                f"Traceback:\n{traceback.format_exc()}"
+            )
+            self.progress.show_error(e, error_context)
+            if context:
+                self._handle_failure(context, e)
             raise
             
     def _get_or_generate_plan(self, query: str, context: ResearchContext) -> Dict:
@@ -96,12 +115,14 @@ class ResearchAgent:
         if plan:
             self.logger.info("Using cached research plan")
             self._display_plan(plan)
+            context.plan = plan  # Store plan in context
             return plan
             
         self.logger.info("Generating new research plan")
         plan = self.planner.generate_plan(query)
         self._display_plan(plan)
         self.cache.set(cache_key, plan)
+        context.plan = plan  # Store plan in context
         return plan
         
     def _display_plan(self, plan: Dict):
@@ -122,37 +143,85 @@ class ResearchAgent:
             self.console.print(f"  • {step['step']} (Priority: {step['priority']})")
             
     def _gather_sources(self, plan: Dict, context: ResearchContext) -> List[Dict]:
-        """Gather sources based on the research plan"""
-        sources = []
-        total_queries = len(plan['primary_search_queries'])
-        
-        for i, query in enumerate(plan['primary_search_queries'], 1):
-            self.progress.update(
-                "Gathering sources",
-                f"Query {i}/{total_queries}: {query[:50]}..."
-            )
-            results = plan['search_results'].get(query, [])
+        """Gather sources in parallel"""
+        try:
+            self.console.print("\n[bold blue]Source Gathering:[/]")
+            sources = []
             
-            for result in results:
-                if self._is_valid_source(result):
-                    self.progress.update(
-                        "Processing source",
-                        f"URL: {result['link'][:50]}..."
-                    )
-                    source_content = self.crawler.process_url(result['link'])
-                    if source_content:
-                        sources.append({
-                            'metadata': result,
-                            'content': source_content
-                        })
-                        context.add_source(result)
-                        
-        return sources
+            # Get all URLs from search results
+            urls_to_process = []
+            for query, results in plan['search_results'].items():
+                for result in results:
+                    try:
+                        if self._is_valid_source(result):
+                            urls_to_process.append((result['link'], result, len(urls_to_process) + 1))
+                    except KeyError as e:
+                        self.logger.error(f"Invalid result structure: {result}")
+                        self.logger.error(f"Missing key: {str(e)}")
+                        continue
+            
+            total_urls = len(urls_to_process)
+            self.progress.update("Gathering sources", f"Processing {total_urls} URLs in parallel")
+            
+            # Process URLs in parallel
+            with ProcessPoolExecutor(max_workers=self.config.max_threads) as executor:
+                # Submit processing tasks
+                future_to_url = {
+                    executor.submit(
+                        self.crawler.process_url, 
+                        url,
+                        self.cache  # Pass cache manager
+                    ): (metadata, index)
+                    for url, metadata, index in urls_to_process
+                }
+                
+                # Process results as they complete
+                for future in as_completed(future_to_url):
+                    metadata, index = future_to_url[future]
+                    try:
+                        content = future.result()
+                        if content:
+                            self._display_source_result(metadata, content, index, total_urls)
+                            sources.append({
+                                'metadata': metadata,
+                                'content': content
+                            })
+                            context.add_source(metadata)
+                    except Exception as e:
+                        self.logger.error(f"Error processing URL {metadata['link']}: {str(e)}")
+                        self.console.print(f"[red]Error processing URL {metadata['link']}: {str(e)}[/]")
+            
+            return sources
+            
+        except Exception as e:
+            self.logger.error(f"Error in source gathering: {str(e)}\nResult data: {plan['search_results']}")
+            raise
+        
+    def _display_source_result(self, metadata: Dict, content: Dict, index: int, total: int):
+        """Display source processing result"""
+        self.console.print(f"\n[yellow]Source {index}/{total}:[/] {metadata['link']}")
+        self.console.print(f"[blue]Type:[/] {metadata.get('source_type', 'unknown')}")
+        
+        # Show content excerpt
+        excerpt = content['content'][:200] + "..." if len(content['content']) > 200 else content['content']
+        self.console.print("[green]Content Preview:[/]")
+        self.console.print(excerpt)
+        
+        if content.get('needs_visual'):
+            self.console.print("[magenta]Visual content detected[/]")
+            
+        self.console.print("[dim]" + "-"*50 + "[/]")
         
     def _analyze_sources(self, sources: List[Dict], context: ResearchContext) -> Dict:
         """Analyze gathered sources with parallel processing"""
         self.console.print("\n[bold blue]Source Analysis:[/]")
         analyzed_sources = []
+        
+        # Get query from context
+        query = context.query if hasattr(context, 'query') else ""
+        
+        # Get response language from plan
+        response_language = context.plan.get('response_language', 'en') if hasattr(context, 'plan') else 'en'
         
         # Split sources into batches for better efficiency
         batch_size = max(1, len(sources) // self.config.max_threads)
@@ -168,7 +237,10 @@ class ResearchAgent:
                 executor.submit(
                     self.analyzer.process_batch, 
                     batch,
-                    self.config.openai_key  # Pass API key for new process
+                    self.config.openai_key,
+                    self.cache,  # Pass cache manager
+                    query,  # Pass query for relevance filtering
+                    response_language  # Pass language for response
                 ): (batch, i)
                 for i, batch in enumerate(source_batches)
             }
@@ -186,8 +258,8 @@ class ResearchAgent:
                     self.logger.error(f"Error analyzing batch {batch_index}: {str(e)}")
                     self.console.print(f"[red]Error analyzing batch {batch_index}: {str(e)}[/]")
         
-        # Combine all analyses
-        return self.analyzer.synthesize_findings(analyzed_sources)
+        # Combine all analyses with language setting
+        return self.analyzer.synthesize_findings(analyzed_sources, response_language)
         
     def _display_batch_analysis(self, analysis: Dict, batch_index: int):
         """Display analysis results for a batch"""

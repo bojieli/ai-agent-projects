@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from utils.content_processing import html_to_markdown, needs_visual_analysis
 import logging
 from typing import Optional, Dict
+import traceback
+from utils.cache_manager import CacheManager
 
 class WebCrawler:
     def __init__(self, config):
@@ -19,37 +21,70 @@ class WebCrawler:
             results = list(executor.map(self.process_url, urls))
         return [r for r in results if r is not None]
         
-    def process_url(self, url: str) -> Optional[Dict]:
-        """Process a single URL and return its content"""
+    @staticmethod
+    def process_url(url: str, cache_manager: Optional[CacheManager] = None) -> Optional[Dict]:
+        """Process a single URL and return its content (process-safe version)"""
+        # Check cache first
+        if cache_manager:
+            cached_content = cache_manager.get_crawled_content(url)
+            if cached_content:
+                logging.info(f"Using cached content for {url}")
+                return cached_content
+                
         driver = None
         try:
-            driver = self._create_driver()
-            driver.get(url)
+            # Create new driver for this process
+            options = webdriver.ChromeOptions()
+            options.add_argument("--headless")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            driver = webdriver.Chrome(options=options)
             
-            # Wait for dynamic content
-            driver.implicitly_wait(self.timeout)
+            # Set reasonable timeout
+            driver.implicitly_wait(30)
             
-            # Get page content
-            soup = BeautifulSoup(driver.page_source, "html.parser")
-            content = self._clean_content(soup)
-            
-            # Check if visual analysis needed
-            requires_visual = self._needs_visual_analysis(soup)
-            if requires_visual:
-                screenshot = driver.get_screenshot_as_base64()
-                return {
-                    'content': content,
-                    'screenshot': screenshot,
-                    'needs_visual': True
-                }
-            
-            return {
-                'content': content,
-                'needs_visual': False
-            }
-            
+            try:
+                driver.get(url)
+            except Exception as e:
+                logging.error(f"Failed to load URL {url}: {str(e)}")
+                return None
+                
+            try:
+                # Get page content
+                soup = BeautifulSoup(driver.page_source, "html.parser")
+                
+                # Clean and convert content
+                content = WebCrawler._clean_content(soup)
+                
+                # Check if visual analysis needed
+                requires_visual = WebCrawler._needs_visual_analysis(soup)
+                if requires_visual:
+                    screenshot = driver.get_screenshot_as_base64()
+                    result = {
+                        'content': content,
+                        'screenshot': screenshot,
+                        'needs_visual': True
+                    }
+                else:
+                    result = {
+                        'content': content,
+                        'needs_visual': False
+                    }
+                
+                # Cache the result
+                if cache_manager:
+                    cache_manager.cache_crawled_content(url, result)
+                
+                return result
+                
+            except Exception as e:
+                logging.error(f"Error processing content for {url}: {str(e)}")
+                logging.error(f"Traceback:\n{traceback.format_exc()}")
+                return None
+                
         except Exception as e:
-            self.logger.error(f"Error processing {url}: {str(e)}")
+            logging.error(f"Critical error processing {url}: {str(e)}")
+            logging.error(f"Traceback:\n{traceback.format_exc()}")
             return None
             
         finally:
@@ -80,8 +115,9 @@ class WebCrawler:
             print(f"Error crawling {url}: {str(e)}")
             return None
             
-    def _clean_content(self, soup: BeautifulSoup) -> str:
-        """Clean and extract main content"""
+    @staticmethod
+    def _clean_content(soup: BeautifulSoup) -> str:
+        """Clean and extract main content (static method)"""
         # Remove unwanted elements
         for element in soup(["script", "style", "nav", "footer", "header"]):
             element.decompose()
@@ -89,8 +125,9 @@ class WebCrawler:
         # Convert to markdown
         return html_to_markdown(str(soup))
 
-    def _needs_visual_analysis(self, soup: BeautifulSoup) -> bool:
-        """Check if page needs visual analysis"""
+    @staticmethod
+    def _needs_visual_analysis(soup: BeautifulSoup) -> bool:
+        """Check if page needs visual analysis (static method)"""
         # Check for tables
         if soup.find_all('table'):
             return True

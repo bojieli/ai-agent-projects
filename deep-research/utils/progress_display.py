@@ -1,4 +1,5 @@
 import sys
+import traceback
 from datetime import datetime
 from typing import Optional
 from rich.console import Console
@@ -6,6 +7,7 @@ from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TextColumn
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
+from rich.traceback import Traceback
 
 class ResearchProgress:
     def __init__(self):
@@ -47,19 +49,32 @@ class ResearchProgress:
         self.console.print("\n")
         self.console.print(Panel(status, title="Deep Research Agent"))
         
-    def show_error(self, error: Exception):
-        """Show error message"""
+    def show_error(self, error: Exception, context: Optional[str] = None):
+        """Show detailed error message with traceback"""
         status = Text()
-        status.append("❌ Research Failed!\n", style="bold red")
+        status.append("❌ Research Failed!\n\n", style="bold red")
         
+        if context:
+            status.append(f"Context: {context}\n\n", style="yellow")
+            
         if hasattr(error, 'status_code'):
             status.append(f"Status Code: {error.status_code}\n", style="yellow")
-        
-        status.append(f"Error: {str(error)}", style="red")
+            
+        status.append(f"Error Type: {type(error).__name__}\n", style="red")
+        status.append(f"Error Message: {str(error)}\n", style="red")
         
         if hasattr(error, 'response_body'):
-            status.append(f"\n\nResponse Details:\n{error.response_body}", style="dim red")
+            status.append(f"\nResponse Details:\n{error.response_body}", style="dim red")
             
-        # Print error without clearing screen
+        # Print error panel
         self.console.print("\n")
-        self.console.print(Panel(status, title="Deep Research Agent")) 
+        self.console.print(Panel(status, title="Deep Research Agent"))
+        
+        # Print traceback
+        self.console.print("\n[bold red]Traceback:[/]")
+        self.console.print(Traceback.from_exception(
+            type(error),
+            error,
+            traceback.extract_tb(error.__traceback__),
+            show_locals=True
+        )) 
