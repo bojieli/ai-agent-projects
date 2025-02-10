@@ -179,51 +179,44 @@ export default function Home() {
       try {
         if (event.data instanceof Blob) {
           // Handle binary audio data
-          console.log('Received binary audio data:', event.data.size, 'bytes');
           const arrayBuffer = await event.data.arrayBuffer();
           const now = Date.now();
           
           if (!audioFormatRef.current) {
             console.log('Warning: audioFormatRef is not set');
+            return;
           }
           
-          if (audioFormatRef.current) {
-            console.log('Converting audio data with format:', audioFormatRef.current);
-            const int16Array = new Int16Array(arrayBuffer);
-            console.log('Int16Array length:', int16Array.length);
-            const float32Array = new Float32Array(int16Array.length);
-            
-            for (let i = 0; i < int16Array.length; i++) {
-              float32Array[i] = int16Array[i] / 32768.0;
-            }
-            console.log('Float32Array created, length:', float32Array.length);
-            
-            if (!echoNodeRef.current) {
-              console.log('Warning: echoNodeRef is not set');
-            }
-            
-            if (echoNodeRef.current) {
-              console.log('Sending unmute command to echo processor');
-              echoNodeRef.current.port.postMessage({ type: 'unmute' });
-              
-              let minVal = 0, maxVal = 0;
-              for (let i = 0; i < float32Array.length; i++) {
-                minVal = Math.min(minVal, float32Array[i]);
-                maxVal = Math.max(maxVal, float32Array[i]);
-              }
-              console.log('Sending audio data to echo processor, data range:', minVal, 'to', maxVal);
-              echoNodeRef.current.port.postMessage(float32Array);
-              isPlayingRef.current = true;
-              console.log('Audio playback started');
-              
-              if (vadEndTimeRef.current && !hasPlaybackLatencyRef.current) {
-                const latency = now - vadEndTimeRef.current;
-                const serverVadLatency = now - (speechEndTimeRef.current || vadEndTimeRef.current);
-                addLog(`First audio playback latency - Browser VAD: ${latency}ms`, 'latency');
-                addLog(`First audio playback latency - Server VAD: ${serverVadLatency}ms`, 'latency');
-                hasPlaybackLatencyRef.current = true;
-              }
-            }
+          const int16Array = new Int16Array(arrayBuffer);
+          const float32Array = new Float32Array(int16Array.length);
+          
+          // Convert Int16 to Float32
+          for (let i = 0; i < int16Array.length; i++) {
+            float32Array[i] = int16Array[i] / 32768.0;
+          }
+          
+          if (!echoNodeRef.current) {
+            console.log('Warning: echoNodeRef is not set');
+            return;
+          }
+          
+          // Send unmute command only if not already playing
+          if (!isPlayingRef.current) {
+            console.log('Sending unmute command to echo processor');
+            echoNodeRef.current.port.postMessage({ type: 'unmute' });
+            isPlayingRef.current = true;
+          }
+          
+          // Send audio data to echo processor
+          echoNodeRef.current.port.postMessage(float32Array);
+          
+          // Calculate latency if needed
+          if (vadEndTimeRef.current && !hasPlaybackLatencyRef.current) {
+            const latency = now - vadEndTimeRef.current;
+            const serverVadLatency = now - (speechEndTimeRef.current || vadEndTimeRef.current);
+            addLog(`First audio playback latency - Browser VAD: ${latency}ms`, 'latency');
+            addLog(`First audio playback latency - Server VAD: ${serverVadLatency}ms`, 'latency');
+            hasPlaybackLatencyRef.current = true;
           }
         } else {
           // Handle JSON messages
@@ -252,6 +245,7 @@ export default function Home() {
               break;
             
             case 'current_speaker':
+              console.log('Current speaker update:', jsonMessage);
               setCurrentSpeaker(jsonMessage.speaker);
               setIsPlayerTurn(jsonMessage.isPlayerTurn);
               break;
@@ -319,14 +313,18 @@ export default function Home() {
     try {
       console.log('Starting recording...');
       
+      // If the AudioContext isn't initialized yet, initialize it
       if (!audioContextRef.current) {
-        throw new Error('Audio system not initialized. Please allow microphone access.');
+        console.log('AudioContext not initialized; attempting to set up audio...');
+        await setupAudioWithRetry();
+        // Note: setupAudioWithRetry sets up audioContextRef.current, echoNodeRef, etc.
       }
 
-      // Ensure audio context is resumed
-      if (audioContextRef.current.state === 'suspended') {
+      // Ensure audio context is resumed for recording
+      if (audioContextRef.current?.state === 'suspended') {
+        console.log('AudioContext is suspended, attempting to resume...');
         await audioContextRef.current.resume();
-        console.log('AudioContext resumed for recording');
+        console.log('AudioContext resumed for recording, state:', audioContextRef.current.state);
       }
       
       // Get microphone stream
@@ -338,33 +336,71 @@ export default function Home() {
           autoGainControl: true
         }
       });
-      console.log('Microphone stream acquired');
+      console.log('Microphone stream acquired, tracks:', streamRef.current.getAudioTracks().length);
       
       console.log('Setting up audio nodes...');
       sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(streamRef.current);
-      workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
+      console.log('MediaStreamSource created');
       
-      // Connect the nodes for recording
+      // Create audio processor worklet node
+      console.log('Creating audio processor worklet node...');
+      workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'audio-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        processorOptions: {
+          sampleRate: audioContextRef.current.sampleRate
+        }
+      });
+      console.log('AudioWorkletNode created with sample rate:', audioContextRef.current.sampleRate);
+      
+      // Connect the nodes: source -> processor
       sourceNodeRef.current.connect(workletNodeRef.current);
+      // Also connect processor to destination for monitoring (optional)
+      workletNodeRef.current.connect(audioContextRef.current.destination);
+      console.log('Audio nodes connected: source -> processor -> destination');
 
       // Handle audio data from the worklet
       workletNodeRef.current.port.onmessage = (event) => {
+        console.log('Received message from AudioWorklet:', event.data);
+        
         if (event.data instanceof ArrayBuffer) {
+          const int16Data = new Int16Array(event.data);
+          let minVal = Infinity, maxVal = -Infinity;
+          for (let i = 0; i < int16Data.length; i++) {
+            minVal = Math.min(minVal, int16Data[i]);
+            maxVal = Math.max(maxVal, int16Data[i]);
+          }
+          console.log('Received audio data from worklet:', event.data.byteLength, 'bytes, range:', minVal, 'to', maxVal);
+          
           // Send audio data to backend
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
-            console.log('Sending audio data to backend:', event.data.byteLength, 'bytes');
-            websocketRef.current.send(event.data);
+            try {
+              console.log('Sending audio data to backend:', event.data.byteLength, 'bytes');
+              websocketRef.current.send(event.data);
+              console.log('Audio data sent successfully');
+            } catch (error) {
+              console.error('Error sending audio data:', error);
+            }
+          } else {
+            console.warn('WebSocket not ready, audio data dropped. State:', websocketRef.current?.readyState);
           }
+        } else if (event.data.type === 'debug') {
+          console.log('AudioWorklet debug:', event.data.message);
         } else if (event.data.type === 'vad') {
+          console.log('VAD event:', event.data);
           if (event.data.status === 'speech_start') {
             console.log('Speech started');
             vadStartTimeRef.current = Date.now();
             // Send speech start event to backend
             if (websocketRef.current?.readyState === WebSocket.OPEN) {
+              console.log('Sending speech_start event');
               websocketRef.current.send(JSON.stringify({
                 type: 'speech_event',
                 status: 'start'
               }));
+            } else {
+              console.warn('WebSocket not ready for speech_start event. State:', websocketRef.current?.readyState);
             }
           } else if (event.data.status === 'speech_end') {
             console.log('Speech ended');
@@ -372,16 +408,32 @@ export default function Home() {
             hasPlaybackLatencyRef.current = false;
             // Send speech end event to backend
             if (websocketRef.current?.readyState === WebSocket.OPEN) {
+              console.log('Sending speech_end event');
               websocketRef.current.send(JSON.stringify({
                 type: 'speech_event',
                 status: 'end'
               }));
+            } else {
+              console.warn('WebSocket not ready for speech_end event. State:', websocketRef.current?.readyState);
             }
           }
+        } else {
+          console.log('Received unknown message from worklet:', event.data);
         }
       };
 
-      console.log('Audio nodes connected successfully');
+      // Add error handler for the worklet
+      workletNodeRef.current.port.onmessageerror = (error) => {
+        console.error('Error in audio processor:', error);
+        addLog('Error processing audio data', 'error');
+      };
+
+      // Add error handler
+      workletNodeRef.current.onprocessorerror = (error) => {
+        console.error('AudioWorklet processor error:', error);
+      };
+
+      console.log('Audio recording setup complete');
       setIsRecording(true);
       addLog('Started recording');
     } catch (error) {
@@ -389,39 +441,52 @@ export default function Home() {
       addLog(`Error starting recording: ${error.message}`, 'error');
       
       // Clean up any partial setup
+      console.log('Cleaning up after error...');
       if (streamRef.current) {
+        console.log('Stopping audio tracks...');
         streamRef.current.getTracks().forEach(track => track.stop());
         streamRef.current = null;
       }
       if (sourceNodeRef.current) {
+        console.log('Disconnecting source node...');
         sourceNodeRef.current.disconnect();
         sourceNodeRef.current = null;
       }
       if (workletNodeRef.current) {
+        console.log('Disconnecting worklet node...');
         workletNodeRef.current.disconnect();
         workletNodeRef.current = null;
       }
+      console.log('Cleanup complete');
     }
   };
 
   const stopRecording = () => {
     try {
+      console.log('Stopping recording...');
       if (workletNodeRef.current) {
+        console.log('Disconnecting worklet node...');
         workletNodeRef.current.disconnect();
         workletNodeRef.current = null;
       }
       
       if (sourceNodeRef.current) {
+        console.log('Disconnecting source node...');
         sourceNodeRef.current.disconnect();
         sourceNodeRef.current = null;
       }
 
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+        console.log('Stopping audio tracks...');
+        streamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log('Track stopped:', track.label, track.readyState);
+        });
         streamRef.current = null;
       }
 
       setIsRecording(false);
+      console.log('Recording stopped successfully');
       addLog('Stopped recording');
     } catch (error) {
       console.error('Error stopping recording:', error);
@@ -432,10 +497,16 @@ export default function Home() {
   const startGame = async () => {
     try {
       // Setup audio first
+      console.log('Setting up audio for new game...');
       await setupAudioWithRetry();
+      
+      // Start recording immediately after setup
+      console.log('Starting initial recording...');
+      await startRecording();
       
       // Only start the game if audio setup was successful
       if (websocketRef.current?.readyState === WebSocket.OPEN) {
+        console.log('Starting game...');
         websocketRef.current.send(JSON.stringify({
           type: 'start_game',
           playerId: 'human_player'
@@ -534,6 +605,14 @@ export default function Home() {
     }
   };
 
+  // Add cleanup when game ends
+  useEffect(() => {
+    if (!isGameStarted && isRecording) {
+      console.log('Game ended, stopping recording...');
+      stopRecording();
+    }
+  }, [isGameStarted]);
+
   return (
     <div className={styles.container}>
       {notification && (
@@ -548,23 +627,13 @@ export default function Home() {
 
         <div className={styles.gameControls}>
           {!isGameStarted ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Welcome to Werewolf Live Audio Game</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className={styles.welcomeText}>
-                  Join an immersive game of deception and deduction where your voice is your most powerful tool.
-                </p>
-                <button 
-                  className={`${styles.button} ${styles.buttonStart}`}
-                  onClick={startGame}
-                  disabled={!isConnected}
-                >
-                  {isConnected ? 'Start New Game' : 'Connecting...'}
-                </button>
-              </CardContent>
-            </Card>
+            <button 
+              className={`${styles.button} ${styles.buttonStart}`}
+              onClick={startGame}
+              disabled={!isConnected}
+            >
+              {isConnected ? 'Start New Game' : 'Connecting...'}
+            </button>
           ) : (
             <div className={styles.gameStatus}>
               <div className={styles.statusGrid}>
@@ -583,26 +652,12 @@ export default function Home() {
                   <p>{currentSpeakerInfo ? getSpeakerDisplayName(currentSpeakerInfo) : ''}</p>
                 </div>
               </div>
-              {isPlayerTurn && (
-                <div className={styles.playerControls}>
-                  <button
-                    className={`${styles.button} ${isRecording ? styles.buttonStop : styles.buttonStart}`}
-                    onClick={isRecording ? stopRecording : startRecording}
-                  >
-                    {isRecording ? (
-                      <>
-                        <MicOff className={styles.buttonIcon} />
-                        Stop Speaking
-                      </>
-                    ) : (
-                      <>
-                        <Mic className={styles.buttonIcon} />
-                        Start Speaking
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
+              
+              <div className={styles.debugInfo}>
+                <p>Is Player Turn: {isPlayerTurn ? 'Yes' : 'No'}</p>
+                <p>Current Speaker: {currentSpeaker}</p>
+                <p>Recording Status: {isRecording ? 'Active' : 'Inactive'}</p>
+              </div>
             </div>
           )}
         </div>

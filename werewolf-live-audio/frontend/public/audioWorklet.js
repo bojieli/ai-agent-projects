@@ -10,6 +10,16 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.requiredSilenceMs = 100;  // 100ms silence for speech end
     this.consecutiveSilentFrames = 0;
     this.lastFrameTime = null;
+    
+    // Debug counters
+    this.processCallCount = 0;
+    this.lastDebugTime = Date.now();
+
+    // Send initial message to confirm processor is created
+    this.port.postMessage({ 
+      type: 'debug', 
+      message: 'AudioProcessor initialized' 
+    });
   }
 
   calculateEnergy(samples) {
@@ -22,9 +32,34 @@ class AudioProcessor extends AudioWorkletProcessor {
 
   process(inputs, outputs, parameters) {
     const input = inputs[0];
-    if (!input || !input[0]) return true;
+    if (!input || !input[0] || input[0].length === 0) {
+      this.port.postMessage({ 
+        type: 'debug', 
+        message: 'No input data received' 
+      });
+      return true;
+    }
 
-    // Convert to mono
+    // Debug input data
+    const inputChannel = input[0];
+    let maxAmp = 0;
+    for (let i = 0; i < inputChannel.length; i++) {
+      maxAmp = Math.max(maxAmp, Math.abs(inputChannel[i]));
+    }
+    
+    // Log input levels periodically
+    this.processCallCount++;
+    const now = Date.now();
+    if (now - this.lastDebugTime > 1000) {
+      this.port.postMessage({ 
+        type: 'debug', 
+        message: `Process called ${this.processCallCount} times, max amplitude: ${maxAmp}` 
+      });
+      this.processCallCount = 0;
+      this.lastDebugTime = now;
+    }
+
+    // Convert to mono if multiple channels
     const monoInput = new Float32Array(input[0].length);
     for (let i = 0; i < input[0].length; i++) {
       let sum = 0;
@@ -32,6 +67,12 @@ class AudioProcessor extends AudioWorkletProcessor {
         sum += input[channel][i];
       }
       monoInput[i] = sum / input.length;
+    }
+
+    // Copy input to output to enable monitoring
+    const output = outputs[0];
+    for (let channel = 0; channel < output.length; channel++) {
+      output[channel].set(monoInput);
     }
 
     // VAD processing
@@ -89,8 +130,15 @@ class AudioProcessor extends AudioWorkletProcessor {
         pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
 
-      // Send the data
-      this.port.postMessage(pcmData.buffer, [pcmData.buffer]);
+      // Send the data if non-zero
+      let maxAbsPCM = 0;
+      for (let i = 0; i < pcmData.length; i++) {
+        maxAbsPCM = Math.max(maxAbsPCM, Math.abs(pcmData[i]));
+      }
+      
+      if (maxAbsPCM > 0) {
+        this.port.postMessage(pcmData.buffer, [pcmData.buffer]);
+      }
     }
 
     return true;
