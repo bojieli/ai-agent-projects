@@ -311,24 +311,14 @@ export default function Home() {
 
   const startRecording = async () => {
     try {
-      console.log('Starting recording...');
-      
-      // If the AudioContext isn't initialized yet, initialize it
       if (!audioContextRef.current) {
-        console.log('AudioContext not initialized; attempting to set up audio...');
         await setupAudioWithRetry();
-        // Note: setupAudioWithRetry sets up audioContextRef.current, echoNodeRef, etc.
       }
 
-      // Ensure audio context is resumed for recording
       if (audioContextRef.current?.state === 'suspended') {
-        console.log('AudioContext is suspended, attempting to resume...');
         await audioContextRef.current.resume();
-        console.log('AudioContext resumed for recording, state:', audioContextRef.current.state);
       }
       
-      // Get microphone stream
-      console.log('Requesting microphone stream...');
       streamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -336,14 +326,9 @@ export default function Home() {
           autoGainControl: true
         }
       });
-      console.log('Microphone stream acquired, tracks:', streamRef.current.getAudioTracks().length);
       
-      console.log('Setting up audio nodes...');
       sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(streamRef.current);
-      console.log('MediaStreamSource created');
       
-      // Create audio processor worklet node
-      console.log('Creating audio processor worklet node...');
       workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'audio-processor', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
@@ -352,142 +337,82 @@ export default function Home() {
           sampleRate: audioContextRef.current.sampleRate
         }
       });
-      console.log('AudioWorkletNode created with sample rate:', audioContextRef.current.sampleRate);
       
-      // Connect the nodes: source -> processor
       sourceNodeRef.current.connect(workletNodeRef.current);
-      // Also connect processor to destination for monitoring (optional)
       workletNodeRef.current.connect(audioContextRef.current.destination);
-      console.log('Audio nodes connected: source -> processor -> destination');
 
       // Handle audio data from the worklet
       workletNodeRef.current.port.onmessage = (event) => {
-        console.log('Received message from AudioWorklet:', event.data);
-        
         if (event.data instanceof ArrayBuffer) {
-          const int16Data = new Int16Array(event.data);
-          let minVal = Infinity, maxVal = -Infinity;
-          for (let i = 0; i < int16Data.length; i++) {
-            minVal = Math.min(minVal, int16Data[i]);
-            maxVal = Math.max(maxVal, int16Data[i]);
-          }
-          console.log('Received audio data from worklet:', event.data.byteLength, 'bytes, range:', minVal, 'to', maxVal);
-          
           // Send audio data to backend
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
-            try {
-              console.log('Sending audio data to backend:', event.data.byteLength, 'bytes');
-              websocketRef.current.send(event.data);
-              console.log('Audio data sent successfully');
-            } catch (error) {
-              console.error('Error sending audio data:', error);
-            }
-          } else {
-            console.warn('WebSocket not ready, audio data dropped. State:', websocketRef.current?.readyState);
+            websocketRef.current.send(event.data);
           }
-        } else if (event.data.type === 'debug') {
-          console.log('AudioWorklet debug:', event.data.message);
         } else if (event.data.type === 'vad') {
-          console.log('VAD event:', event.data);
           if (event.data.status === 'speech_start') {
-            console.log('Speech started');
             vadStartTimeRef.current = Date.now();
-            // Send speech start event to backend
             if (websocketRef.current?.readyState === WebSocket.OPEN) {
-              console.log('Sending speech_start event');
               websocketRef.current.send(JSON.stringify({
                 type: 'speech_event',
                 status: 'start'
               }));
-            } else {
-              console.warn('WebSocket not ready for speech_start event. State:', websocketRef.current?.readyState);
             }
           } else if (event.data.status === 'speech_end') {
-            console.log('Speech ended');
             vadEndTimeRef.current = Date.now();
             hasPlaybackLatencyRef.current = false;
-            // Send speech end event to backend
             if (websocketRef.current?.readyState === WebSocket.OPEN) {
-              console.log('Sending speech_end event');
               websocketRef.current.send(JSON.stringify({
                 type: 'speech_event',
                 status: 'end'
               }));
-            } else {
-              console.warn('WebSocket not ready for speech_end event. State:', websocketRef.current?.readyState);
             }
           }
-        } else {
-          console.log('Received unknown message from worklet:', event.data);
         }
       };
 
-      // Add error handler for the worklet
       workletNodeRef.current.port.onmessageerror = (error) => {
         console.error('Error in audio processor:', error);
         addLog('Error processing audio data', 'error');
       };
 
-      // Add error handler
-      workletNodeRef.current.onprocessorerror = (error) => {
-        console.error('AudioWorklet processor error:', error);
-      };
-
-      console.log('Audio recording setup complete');
       setIsRecording(true);
-      addLog('Started recording');
     } catch (error) {
       console.error('Error starting recording:', error);
       addLog(`Error starting recording: ${error.message}`, 'error');
       
-      // Clean up any partial setup
-      console.log('Cleaning up after error...');
       if (streamRef.current) {
-        console.log('Stopping audio tracks...');
         streamRef.current.getTracks().forEach(track => track.stop());
         streamRef.current = null;
       }
       if (sourceNodeRef.current) {
-        console.log('Disconnecting source node...');
         sourceNodeRef.current.disconnect();
         sourceNodeRef.current = null;
       }
       if (workletNodeRef.current) {
-        console.log('Disconnecting worklet node...');
         workletNodeRef.current.disconnect();
         workletNodeRef.current = null;
       }
-      console.log('Cleanup complete');
     }
   };
 
   const stopRecording = () => {
     try {
-      console.log('Stopping recording...');
       if (workletNodeRef.current) {
-        console.log('Disconnecting worklet node...');
         workletNodeRef.current.disconnect();
         workletNodeRef.current = null;
       }
       
       if (sourceNodeRef.current) {
-        console.log('Disconnecting source node...');
         sourceNodeRef.current.disconnect();
         sourceNodeRef.current = null;
       }
 
       if (streamRef.current) {
-        console.log('Stopping audio tracks...');
-        streamRef.current.getTracks().forEach(track => {
-          track.stop();
-          console.log('Track stopped:', track.label, track.readyState);
-        });
+        streamRef.current.getTracks().forEach(track => track.stop());
         streamRef.current = null;
       }
 
       setIsRecording(false);
-      console.log('Recording stopped successfully');
-      addLog('Stopped recording');
     } catch (error) {
       console.error('Error stopping recording:', error);
       addLog(`Error stopping recording: ${error.message}`, 'error');
@@ -496,17 +421,10 @@ export default function Home() {
 
   const startGame = async () => {
     try {
-      // Setup audio first
-      console.log('Setting up audio for new game...');
       await setupAudioWithRetry();
-      
-      // Start recording immediately after setup
-      console.log('Starting initial recording...');
       await startRecording();
       
-      // Only start the game if audio setup was successful
       if (websocketRef.current?.readyState === WebSocket.OPEN) {
-        console.log('Starting game...');
         websocketRef.current.send(JSON.stringify({
           type: 'start_game',
           playerId: 'human_player'
