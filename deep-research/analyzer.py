@@ -115,15 +115,6 @@ class ContentAnalyzer:
     def process_content(self, sources: List[Dict], query: str = "", response_language: str = "en") -> Dict:
         """Process a batch of sources"""
         try:
-            # Filter irrelevant content if query is provided
-            if query:
-                sources = self._filter_irrelevant_content(sources, query)
-                if not sources:
-                    return {
-                        'summary': "No relevant sources found after filtering",
-                        'sources': []
-                    }
-            
             # Combine all text content for batch analysis
             combined_text = "\n\n".join(
                 f"Source {i+1}:\n{s.get('content', {}).get('content', '')}"  # Handle nested content
@@ -132,8 +123,8 @@ class ContentAnalyzer:
                 for i, s in enumerate(sources)
             )
             
-            # Analyze combined text with language setting
-            text_analysis = self.analyze_text(combined_text, response_language)
+            # Analyze combined text with language setting and query context
+            text_analysis = self.analyze_text(combined_text, response_language, query)
             
             analysis = {
                 'summary': text_analysis,
@@ -153,7 +144,7 @@ class ContentAnalyzer:
                     
                 if needs_visual and screenshot:
                     try:
-                        visual_analysis = self.analyze_visual(screenshot, response_language)
+                        visual_analysis = self.analyze_visual(screenshot, response_language, query)
                         visual_analyses.append(visual_analysis)
                     except Exception as e:
                         self.logger.error(f"Error processing visual content: {str(e)}")
@@ -268,32 +259,46 @@ class ContentAnalyzer:
         {template["requirements"][2]}
         {template["requirements"][3]}"""
         
-    def analyze_text(self, content: str, language: str = "en") -> str:
+    def analyze_text(self, content: str, language: str = "en", query: str = "") -> str:
         """Analyze text content with error handling"""
         try:
             # Define language-specific prompts
             prompts = {
-                "zh": f"""分析并总结以下内容：
+                "zh": f"""分析并总结以下内容，重点关注与查询相关的信息：
+
+查询：{query}
 
 内容：
 {content[:3000]}
 
 请提供一个全面的总结，包括：
-1. 主要观点和论述
-2. 关键信息和数据
-3. 重要结论
-4. 潜在的影响和意义""",
+1. 与查询最相关的主要观点和论述
+2. 重要的支持数据和证据
+3. 关键结论和发现
+4. 潜在的影响和意义
 
-                "en": f"""Analyze and summarize this content:
+注意：
+- 重点关注与查询直接相关的内容
+- 简要提及相关的背景信息
+- 忽略无关内容，但不要完全过滤掉可能有用的信息""",
+
+                "en": f"""Analyze and summarize the following content, focusing on information relevant to the query:
+
+Query: {query}
 
 Content:
 {content[:3000]}
 
 Provide a comprehensive summary that includes:
-1. Main points and arguments
-2. Key information and data
-3. Important conclusions
-4. Potential implications and significance"""
+1. Main points and arguments most relevant to the query
+2. Important supporting data and evidence
+3. Key conclusions and findings
+4. Potential implications and significance
+
+Note:
+- Focus on content directly relevant to the query
+- Briefly mention relevant background information
+- Ignore irrelevant content but don't completely filter out potentially useful information"""
             }
             
             # Use appropriate prompt based on language
@@ -304,7 +309,7 @@ Provide a comprehensive summary that includes:
             self.logger.error(f"Error in text analysis: {str(e)}\n{traceback.format_exc()}")
             raise
             
-    def analyze_visual(self, screenshot_data: str, language: str = "en") -> str:
+    def analyze_visual(self, screenshot_data: str, language: str = "en", query: str = "") -> str:
         """Analyze visual content with error handling"""
         try:
             # Check if data is already base64
@@ -317,17 +322,25 @@ Provide a comprehensive summary that includes:
             
             # Define language-specific prompts
             prompts = {
-                "zh": """详细描述并分析这张截图的内容：
-1. 描述主要视觉元素
-2. 解释关键信息和数据
-3. 分析图片的目的和意义
-4. 指出任何重要的细节或模式""",
+                "zh": f"""详细描述并分析这张截图的内容，重点关注与查询相关的信息：
 
-                "en": """Describe and analyze this screenshot in detail:
-1. Describe the main visual elements
+查询：{query}
+
+请分析以下方面：
+1. 描述与查询相关的主要视觉元素
+2. 解释重要的信息和数据
+3. 分析图片对理解查询主题的价值
+4. 指出任何支持或补充查询的细节""",
+
+                "en": f"""Describe and analyze this screenshot in detail, focusing on information relevant to the query:
+
+Query: {query}
+
+Please analyze:
+1. Describe main visual elements relevant to the query
 2. Explain key information and data
-3. Analyze the purpose and significance
-4. Point out any important details or patterns"""
+3. Analyze the image's value for understanding the query topic
+4. Point out any details that support or complement the query"""
             }
             
             # Use appropriate prompt based on language
