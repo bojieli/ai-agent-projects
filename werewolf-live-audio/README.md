@@ -49,7 +49,7 @@ A real-time voice chat demo featuring speech-to-text, AI conversation, and text-
 
 1. Start the backend server: `cd backend && npm start`
 2. Start the frontend development server: `cd frontend && npm run dev`
-3. Open http://localhost:3000 in your browser
+3. Open http://localhost:3001 in your browser
 4. Click "Start Recording" to begin a conversation
 
 ## License

@@ -7,6 +7,7 @@ const { preprocessSentence } = require('./utils/textProcessor');
 const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
+const GameManager = require('./game/game_manager');
 
 // Import franc dynamically at the top level
 let franc;
@@ -50,11 +51,13 @@ class ConnectionHandler {
     }
 
     this.audioFormat = null;  // Add this property
-
     this.expectedPlaybackEndTime = null;  // Add this property
-
     this.lastSyncedHistoryLength = 0;  // Track how much of history has been synced
     this.lastSyncedHistory = [];  // Keep track of last synced state
+
+    // Initialize game manager
+    this.gameManager = new GameManager(this);
+    this.playerId = null;
 
     this.setupWebSocketHandlers();
     this.connectToASR();
@@ -77,6 +80,18 @@ class ConnectionHandler {
           type: 'pong',
           timestamp: jsonMessage.timestamp
         }));
+        return;
+      }
+
+      // Handle game-related messages
+      if (jsonMessage.type === 'start_game') {
+        this.playerId = jsonMessage.playerId || 'human_player';
+        await this.gameManager.startGame(this.playerId);
+        return;
+      }
+
+      if (jsonMessage.type === 'player_input') {
+        await this.gameManager.handleHumanInput(this.playerId, jsonMessage.message);
         return;
       }
 
@@ -174,38 +189,9 @@ class ConnectionHandler {
       
       this.logEvent('transcript', { text: transcript, isFinal: is_final, messageId: this.currentMessageId });
 
-      // Concatenate final transcript if available
-      const fullTranscript = this.finalTranscript ? this.finalTranscript + ' ' + transcript : transcript;
-      if (is_final) {
-        this.finalTranscript = fullTranscript;
-      }
-
-      // Only process if this transcript is different from the last one we processed
-      if (!is_final || fullTranscript !== this.lastProcessedTranscript) {
-        this.lastProcessedTranscript = fullTranscript;
-        
-        // Update message history similar to frontend
-        const lastMessage = this.messageHistory[this.messageHistory.length - 1];
-        const isLastMessageUser = lastMessage && 
-          (lastMessage.role === 'user' || lastMessage.role === 'transcript');
-
-        if (isLastMessageUser) {
-          // Replace the last user message
-          this.messageHistory = [
-            ...this.messageHistory.slice(0, -1),
-            { role: 'user', content: fullTranscript, messageId: this.currentMessageId }
-          ];
-        } else {
-          // Append new message
-          this.messageHistory.push({ 
-            role: 'user', 
-            content: fullTranscript,
-            messageId: this.currentMessageId 
-          });
-        }
-
-        this.syncChatHistory();
-        this.generateAIResponse();
+      // If this is a final transcript and it's the player's turn, forward it to the game manager
+      if (is_final && this.playerId && this.gameManager.state.currentSpeaker === this.playerId) {
+        await this.gameManager.handleHumanInput(this.playerId, transcript);
       }
     } else if (result.type === 'speech_start') {
       // Clear the TTS queue when speech starts
@@ -968,6 +954,8 @@ wss.on('connection', (ws) => {
   new ConnectionHandler(ws);
 });
 
-server.listen(config.LISTEN_PORT, config.LISTEN_HOST, () => {
-  console.log(`Server is running on ${config.LISTEN_HOST}:${config.LISTEN_PORT}`);
+// Start the server
+const port = process.env.PORT || 3000;
+server.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
 });

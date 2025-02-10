@@ -1,0 +1,249 @@
+.container {
+  min-height: 100vh;
+  padding: 1rem;
+  background-color: #f8fafc;
+  position: relative;
+}
+
+.main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+}
+
+.title {
+  font-size: 2.5rem;
+  font-weight: bold;
+  color: #333;
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.gameControls {
+  width: 100%;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.statusGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.statusItem {
+  background-color: #f8fafc;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  text-align: center;
+}
+
+.statusItem h3 {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.statusItem p {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.buttonStart {
+  background-color: #22c55e !important;
+}
+
+.buttonStart:hover {
+  background-color: #16a34a !important;
+}
+
+.buttonStop {
+  background-color: #ef4444 !important;
+}
+
+.buttonStop:hover {
+  background-color: #dc2626 !important;
+}
+
+.buttonIcon {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: white;
+  background-color: #4a5568;
+  border: none;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.button:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.button:disabled {
+  background-color: #a0aec0;
+  cursor: not-allowed;
+}
+
+.gameStatus {
+  width: 100%;
+  padding: 1rem;
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.gameStatus p {
+  margin: 0.5rem 0;
+  font-size: 1.1rem;
+  color: #2d3748;
+}
+
+.playerControls {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: center;
+}
+
+.logs {
+  width: 100%;
+  max-width: 800px;
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  padding: 1rem;
+}
+
+.logs h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #2d3748;
+  margin-bottom: 1rem;
+}
+
+.logContent {
+  height: 400px;
+  overflow-y: auto;
+  padding: 1rem;
+  background-color: #f8fafc;
+  border-radius: 0.25rem;
+}
+
+.logEntry {
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: #4a5568;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding-left: 1rem;
+}
+
+.logEntry:last-child {
+  border-bottom: none;
+}
+
+.speakerName {
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 150px;
+}
+
+@media (max-width: 768px) {
+  .main {
+    padding: 1rem;
+  }
+
+  .title {
+    font-size: 2rem;
+  }
+
+  .button {
+    width: 100%;
+  }
+
+  .logs {
+    margin-top: 1rem;
+  }
+
+  .logContent {
+    height: 300px;
+  }
+}
+
+.notification {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #1e293b;
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  z-index: 50;
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translate(-50%, -100%);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+.welcomeText {
+  margin-bottom: 1.5rem;
+  text-align: center;
+  color: #64748b;
+  font-size: 1.1rem;
+  line-height: 1.6;
+}
+
+.logsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.logMessage {
+  flex: 1;
+  line-height: 1.5;
+} 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Mic, MicOff, Trash2 } from 'lucide-react';
@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import styles from '../styles/Home.module.css';
 
 interface LogEntry {
   timestamp: number;
@@ -23,6 +24,12 @@ interface TabButtonProps {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+}
+
+interface SpeakerInfo {
+  speaker: string;
+  name: string;
+  role: string;
 }
 
 const CodeBlock = ({ node, inline, className, children, ...props }) => {
@@ -64,98 +71,150 @@ const TabButton: React.FC<TabButtonProps> = ({ active, onClick, children }) => (
 
 export default function Home() {
   const [isRecording, setIsRecording] = useState(false);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [isGameStarted, setIsGameStarted] = useState(false);
+  const [gameStatus, setGameStatus] = useState('');
+  const [currentSpeaker, setCurrentSpeaker] = useState('');
+  const [isPlayerTurn, setIsPlayerTurn] = useState(false);
   const websocketRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const echoNodeRef = useRef<AudioWorkletNode | null>(null);
   const audioFormatRef = useRef<any>(null);
-  const speechEndTimeRef = useRef<number | null>(null);
-  const llmStartTimeRef = useRef<number | null>(null);
-  const vadEndTimeRef = useRef<number | null>(null);
-  const hasPlaybackLatencyRef = useRef<boolean>(false);
-  const vadStartTimeRef = useRef<number | null>(null);
-  const audioQueueRef = useRef<Float32Array[]>([]);
-  const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const playbackStartTimeRef = useRef<number | null>(null);
-  const [finalTranscripts, setFinalTranscripts] = useState<string>('');
-  // Add this ref to track the current valid message ID
-  const currentValidMessageIdRef = useRef<string | null>(null);
-  // Add this ref to track if audio is currently playing
+  const vadStartTimeRef = useRef<number | null>(null);
+  const vadEndTimeRef = useRef<number | null>(null);
+  const speechEndTimeRef = useRef<number | null>(null);
+  const hasPlaybackLatencyRef = useRef<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
-  // Add these refs after other refs
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [finalTranscripts, setFinalTranscripts] = useState<string>('');
+  const currentValidMessageIdRef = useRef<string | null>(null);
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const logsRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollChatRef = useRef(true);
   const shouldAutoScrollLogsRef = useRef(true);
   const [activeTab, setActiveTab] = useState<'chat' | 'logs'>('chat');
+  const [currentSpeakerInfo, setCurrentSpeakerInfo] = useState<SpeakerInfo | null>(null);
+  const [playerRole, setPlayerRole] = useState<string | null>(null);
+  const [gamePhase, setGamePhase] = useState<string>('waiting');
+  const [notification, setNotification] = useState<string | null>(null);
 
-  const addLog = (message: string, type: LogEntry['type'] = 'info') => {
-    setLogs(prev => [...prev, {
-      timestamp: Date.now(),
-      message,
-      type
-    }]);
+  const addLog = useCallback((message: string, type: string = 'info') => {
+    setLogs(logs => [...logs, `[${type}] ${message}`]);
+    // Show important notifications
+    if (type === 'info' && !message.startsWith('Transcript:')) {
+      setNotification(message);
+      setTimeout(() => setNotification(null), 5000);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs]);
+
+  const getSpeakerDisplayName = (speakerInfo: SpeakerInfo) => {
+    if (speakerInfo.speaker === 'Moderator') {
+      return 'Moderator';
+    }
+    return `${speakerInfo.name} (${speakerInfo.role})`;
+  };
+
+  const getSpeakerColor = (role: string) => {
+    switch (role) {
+      case 'Moderator':
+        return '#4a5568'; // Gray
+      case 'werewolf':
+        return '#e53e3e'; // Red
+      case 'seer':
+        return '#805ad5'; // Purple
+      case 'witch':
+        return '#38a169'; // Green
+      case 'hunter':
+        return '#d69e2e'; // Yellow
+      case 'villager':
+        return '#3182ce'; // Blue
+      default:
+        return '#718096'; // Default gray
+    }
   };
 
   const setupWebSocket = () => {
     if (websocketRef.current?.readyState === WebSocket.OPEN) return;
 
-    // Determine if we're running on localhost
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    
-    let wsUrl;
-    if (isLocalhost) {
-      // For localhost development
-      wsUrl = `ws://localhost:${process.env.WEBSOCKET_PORT}`;
-    } else {
-      // For production deployment
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      wsUrl = `${protocol}//${window.location.host}/ws`;
-    }
-    
-    console.log('Connecting to WebSocket:', wsUrl);
-    websocketRef.current = new WebSocket(wsUrl);
-    websocketRef.current.binaryType = 'arraybuffer';
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = process.env.NODE_ENV === 'production' 
+      ? window.location.host 
+      : 'localhost:3000';
+    const ws = new WebSocket(`${protocol}//${host}/ws`);
+    websocketRef.current = ws;
 
-    websocketRef.current.onopen = () => {
-      // Start sending pings when connection opens
-      if (pingIntervalRef.current) {
-        clearInterval(pingIntervalRef.current);
-      }
-      pingIntervalRef.current = setInterval(() => {
-        if (websocketRef.current?.readyState === WebSocket.OPEN) {
-          websocketRef.current.send(JSON.stringify({
-            type: 'ping',
-            timestamp: Date.now()
-          }));
-        }
-      }, 1000);
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      setIsConnected(true);
+      addLog('Connected to server');
     };
 
-    websocketRef.current.onmessage = async (event) => {
-      try {
-        if (event.data instanceof ArrayBuffer) {
-          const now = Date.now();
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+      setIsConnected(false);
+      addLog('Disconnected from server');
+      
+      // Attempt to reconnect after a delay
+      setTimeout(setupWebSocket, 2000);
+    };
 
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      addLog('WebSocket error occurred', 'error');
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        if (event.data instanceof Blob) {
+          // Handle binary audio data
+          console.log('Received binary audio data:', event.data.size, 'bytes');
+          const arrayBuffer = await event.data.arrayBuffer();
+          const now = Date.now();
+          
+          if (!audioFormatRef.current) {
+            console.log('Warning: audioFormatRef is not set');
+          }
+          
           if (audioFormatRef.current) {
-            const int16Array = new Int16Array(event.data);
+            console.log('Converting audio data with format:', audioFormatRef.current);
+            const int16Array = new Int16Array(arrayBuffer);
+            console.log('Int16Array length:', int16Array.length);
             const float32Array = new Float32Array(int16Array.length);
             
             for (let i = 0; i < int16Array.length; i++) {
               float32Array[i] = int16Array[i] / 32768.0;
             }
+            console.log('Float32Array created, length:', float32Array.length);
+            
+            if (!echoNodeRef.current) {
+              console.log('Warning: echoNodeRef is not set');
+            }
             
             if (echoNodeRef.current) {
-              // Set playback start time when first audio chunk is received
-              if (!playbackStartTimeRef.current) {
-                playbackStartTimeRef.current = Date.now();
-              }
-
+              console.log('Sending unmute command to echo processor');
               echoNodeRef.current.port.postMessage({ type: 'unmute' });
+              
+              let minVal = 0, maxVal = 0;
+              for (let i = 0; i < float32Array.length; i++) {
+                minVal = Math.min(minVal, float32Array[i]);
+                maxVal = Math.max(maxVal, float32Array[i]);
+              }
+              console.log('Sending audio data to echo processor, data range:', minVal, 'to', maxVal);
+              echoNodeRef.current.port.postMessage(float32Array);
+              isPlayingRef.current = true;
+              console.log('Audio playback started');
               
               if (vadEndTimeRef.current && !hasPlaybackLatencyRef.current) {
                 const latency = now - vadEndTimeRef.current;
@@ -164,560 +223,419 @@ export default function Home() {
                 addLog(`First audio playback latency - Server VAD: ${serverVadLatency}ms`, 'latency');
                 hasPlaybackLatencyRef.current = true;
               }
-              echoNodeRef.current.port.postMessage(float32Array);
             }
           }
         } else {
-          const jsonData = JSON.parse(event.data);
-          const now = Date.now();
+          // Handle JSON messages
+          const jsonMessage = JSON.parse(event.data);
+          console.log('Received message:', jsonMessage);
           
-          // Add ping handling
-          if (jsonData.type === 'pong') {
-            const latency = now - jsonData.timestamp;
-            addLog(`WebSocket latency: ${latency}ms`, 'latency');
-            return;
-          }
-
-          switch (jsonData.type) {
-            case 'speech_end':
-              speechEndTimeRef.current = now;
-              if (vadEndTimeRef.current) {
-                const vadToServerLatency = now - vadEndTimeRef.current;
-                addLog(`[Server] Speech end detected (${vadToServerLatency}ms after frontend VAD)`, 'latency');
-              } else {
-                // Use server's speech end as VAD end time if frontend didn't detect it
-                vadEndTimeRef.current = now;
-                hasPlaybackLatencyRef.current = false;
-                addLog('[Server] Speech end detected (using as VAD endpoint)', 'latency');
-              }
+          switch (jsonMessage.type) {
+            case 'speaker_info':
+              setCurrentSpeakerInfo({
+                speaker: jsonMessage.speaker,
+                name: jsonMessage.name,
+                role: jsonMessage.role
+              });
               break;
 
-            case 'speech_start':
-              // Handle interrupt
-              handleInterrupt();
-              // Clear audio queue and stop playback
-              if (echoNodeRef.current) {
-                echoNodeRef.current.port.postMessage({ type: 'clear' });
-              }
-              audioQueueRef.current = [];
-              
-              if (vadStartTimeRef.current) {
-                const vadToServerLatency = now - vadStartTimeRef.current;
-                addLog(`[Server] Speech start detected (${vadToServerLatency}ms after frontend VAD)`, 'latency');
-              } else {
-                vadStartTimeRef.current = now;
-                addLog('[Server] Speech start detected (using as VAD start point)', 'latency');
-              }
+            case 'game_log':
+              addLog(`${jsonMessage.speaker}: ${jsonMessage.message}`);
               break;
 
-            case 'llm_start':
-              llmStartTimeRef.current = now;
-              if (vadEndTimeRef.current) {
-                const browserVadLatency = now - vadEndTimeRef.current;
-                const serverVadLatency = now - (speechEndTimeRef.current || vadEndTimeRef.current);
-                addLog(`Transcribe latency - Browser VAD: ${browserVadLatency}ms`, 'latency');
-                addLog(`Transcribe latency - Server VAD: ${serverVadLatency}ms`, 'latency');
-              }
+            case 'transcript':
+              addLog(`Transcript: ${jsonMessage.text}${jsonMessage.isFinal ? ' (final)' : ''}`);
               break;
-
-            case 'llm_first_token':
-              if (llmStartTimeRef.current) {
-                const latency = now - llmStartTimeRef.current;
-                addLog(`LLM time to first token: ${latency}ms`, 'latency');
-              }
+            
+            case 'game_status':
+              setGameStatus(jsonMessage.status);
               break;
-
-            case 'llm_first_sentence':
-              if (vadEndTimeRef.current) {
-                const llmLatency = now - llmStartTimeRef.current;
-                const browserVadLatency = now - vadEndTimeRef.current;
-                const serverVadLatency = now - (speechEndTimeRef.current || vadEndTimeRef.current);
-                addLog(`LLM first sentence latency - LLM: ${llmLatency}ms`, 'latency');
-                addLog(`LLM first sentence latency - Browser VAD: ${browserVadLatency}ms`, 'latency');
-                addLog(`LLM first sentence latency - Server VAD: ${serverVadLatency}ms`, 'latency');
-              }
+            
+            case 'current_speaker':
+              setCurrentSpeaker(jsonMessage.speaker);
+              setIsPlayerTurn(jsonMessage.isPlayerTurn);
               break;
-
-            case 'tts_complete':
-              if (vadEndTimeRef.current) {
-                addLog(`TTS synthesis time: ${jsonData.synthesisTime}ms`, 'latency');
-              }
+            
+            case 'game_started':
+              setIsGameStarted(true);
+              addLog('Game has started!');
+              break;
+            
+            case 'game_ended':
+              setIsGameStarted(false);
+              addLog(`Game ended! ${jsonMessage.winner} won!`);
               break;
 
             case 'audio_start':
-              // Reset playback start time when new audio stream starts
-              playbackStartTimeRef.current = null;
-              if (echoNodeRef.current) {
-                echoNodeRef.current.port.postMessage({ type: 'unmute' });
-              }
-              addLog(`Audio format: ${JSON.stringify(jsonData.format)}`);
-              audioFormatRef.current = jsonData.format;
-              break;
-            
-            case 'audio_end':
-              addLog('Audio streaming completed');
-              break;
-            
-            case 'transcript':
-              if (jsonData.messageId) {
-                // Update the current valid message ID when receiving a transcript
-                currentValidMessageIdRef.current = jsonData.messageId;
-              }
-              if (jsonData.isFinal) {
-                addLog(`[ASR] Final transcript: "${jsonData.text}"`);
-              } else {
-                addLog(`[ASR] Interim transcript: "${jsonData.text}"`);
-              }
-              break;
-            
-            case 'error':
-              addLog(`Error: ${jsonData.message}`, 'error');
-              break;
-            
-            case 'llm_sentence':
-              if (jsonData.messageId === currentValidMessageIdRef.current) {
-                addLog(`LLM: "${jsonData.text}"`, 'llm');
-              } else {
-                addLog(`Ignored LLM response for recalled message: "${jsonData.text}"`, 'info');
-              }
-              break;
-            
-            case 'websocket_latency':
-              addLog(`WebSocket RTT: ${jsonData.roundTripTime}ms`, 'latency');
+              handleAudioStart(jsonMessage.format);
               break;
 
-            case 'chat_history_delta':
-              setChatHistory(prev => {
-                // Remove messages from startIndex onwards and insert new messages
-                return [
-                  ...prev.slice(0, jsonData.startIndex),
-                  ...jsonData.messages
-                ];
-              });
+            case 'audio_end':
+            case 'tts_start':
+            case 'tts_complete':
+              // These are informational messages, we can log them if needed
+              console.log('Audio event:', jsonMessage);
               break;
-            
-            case 'debug_info':
-              addLog(jsonData.message, 'info');
-              break;
-            
+
             default:
-              addLog(`Received message: ${JSON.stringify(jsonData)}`);
+              console.log('Unknown message type:', jsonMessage);
           }
         }
       } catch (error) {
-        addLog(`Error processing message: ${error}`, 'error');
+        console.error('Error processing message:', error);
       }
     };
+  };
 
-    websocketRef.current.onclose = () => {
-      addLog('WebSocket closed');
-      websocketRef.current = null;
-    };
+  useEffect(() => {
+    setupWebSocket();
 
-    websocketRef.current.onerror = (error) => {
-      addLog(`WebSocket error: ${error}`, 'error');
+    return () => {
+      if (websocketRef.current) {
+        websocketRef.current.close();
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
     };
+  }, []);
+
+  const handleAudioStart = async (format: any) => {
+    console.log('Audio stream starting, format:', format);
+    audioFormatRef.current = format;
+    
+    // Ensure audio context is resumed for playback
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      try {
+        await audioContextRef.current.resume();
+        console.log('AudioContext resumed for playback');
+      } catch (error) {
+        console.error('Error resuming AudioContext:', error);
+      }
+    }
   };
 
   const startRecording = async () => {
     try {
-      // Setup WebSocket first
-      setupWebSocket();
+      console.log('Starting recording...');
       
-      // Check if AudioContext and AudioWorklet are supported
-      if (!window.AudioContext && !(window as any).webkitAudioContext) {
-        throw new Error('AudioContext is not supported in this browser');
+      if (!audioContextRef.current) {
+        throw new Error('Audio system not initialized. Please allow microphone access.');
       }
 
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      
-      // Create AudioContext with specific sample rate
-      audioContextRef.current = new AudioContextClass({
-        sampleRate: 16000
-      });
-      
-      // Check if audioWorklet is supported
-      if (!audioContextRef.current.audioWorklet) {
-        throw new Error('AudioWorklet is not supported in this browser. Please use a modern browser like Chrome or Firefox.');
-      }
-      
-      // Resume the audio context first (needed for some browsers)
+      // Ensure audio context is resumed
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
+        console.log('AudioContext resumed for recording');
       }
       
-      console.log('Audio context created with sample rate:', audioContextRef.current.sampleRate);
+      // Get microphone stream
+      console.log('Requesting microphone stream...');
+      streamRef.current = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      console.log('Microphone stream acquired');
       
-      try {
-        // Add the audio worklet module with the full URL path
-        const workletUrl = new URL('/audioWorklet.js', window.location.origin).href;
-        console.log('Loading audio worklet from:', workletUrl);
-        
-        // Add a timeout to the worklet loading
-        const workletLoadPromise = audioContextRef.current.audioWorklet.addModule(workletUrl);
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Audio worklet load timeout')), 5000);
-        });
-        
-        await Promise.race([workletLoadPromise, timeoutPromise]);
-        console.log('Audio worklet loaded successfully');
-        
-      } catch (workletError) {
-        console.error('Error loading audio worklet:', workletError);
-        throw new Error(`Failed to load audio worklet module: ${workletError.message}`);
-      }
-
-      // Check if getUserMedia is supported
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('getUserMedia is not supported in this browser');
-      }
-
-      // Get user media after worklet is loaded
-      try {
-        streamRef.current = await navigator.mediaDevices.getUserMedia({ 
-          audio: {
-            channelCount: 1,
-            sampleRate: 16000,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          } 
-        });
-      } catch (mediaError) {
-        console.error('Error accessing microphone:', mediaError);
-        throw new Error(`Microphone access failed: ${mediaError.message}`);
-      }
+      console.log('Setting up audio nodes...');
+      sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(streamRef.current);
+      workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
       
-      try {
-        sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(streamRef.current);
-        workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
-        echoNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'echo-processor');
-        
-        sourceNodeRef.current.connect(workletNodeRef.current);
-        echoNodeRef.current.connect(audioContextRef.current.destination);
+      // Connect the nodes for recording
+      sourceNodeRef.current.connect(workletNodeRef.current);
 
-        console.log('Audio nodes connected successfully');
-      } catch (nodeError) {
-        console.error('Error setting up audio nodes:', nodeError);
-        throw new Error(`Audio node setup failed: ${nodeError.message}`);
-      }
-
+      // Handle audio data from the worklet
       workletNodeRef.current.port.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) {
+          // Send audio data to backend
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
+            console.log('Sending audio data to backend:', event.data.byteLength, 'bytes');
             websocketRef.current.send(event.data);
           }
         } else if (event.data.type === 'vad') {
-          if (event.data.status === 'speech_end') {
+          if (event.data.status === 'speech_start') {
+            console.log('Speech started');
+            vadStartTimeRef.current = Date.now();
+            // Send speech start event to backend
+            if (websocketRef.current?.readyState === WebSocket.OPEN) {
+              websocketRef.current.send(JSON.stringify({
+                type: 'speech_event',
+                status: 'start'
+              }));
+            }
+          } else if (event.data.status === 'speech_end') {
+            console.log('Speech ended');
             vadEndTimeRef.current = Date.now();
             hasPlaybackLatencyRef.current = false;
-            addLog('[Frontend VAD] End of speech detected');
-          } else if (event.data.status === 'speech_start') {
-            vadStartTimeRef.current = Date.now();
-            addLog('[Frontend VAD] Start of speech detected');
+            // Send speech end event to backend
+            if (websocketRef.current?.readyState === WebSocket.OPEN) {
+              websocketRef.current.send(JSON.stringify({
+                type: 'speech_event',
+                status: 'end'
+              }));
+            }
           }
         }
       };
 
-      // Add message handler for the echo node
-      echoNodeRef.current.port.onmessage = (event) => {
-        if (event.data.type === 'queue_empty' && isPlayingRef.current) {
-          isPlayingRef.current = false;
-
-          // Reset playback state
-          playbackStartTimeRef.current = null;
-          hasPlaybackLatencyRef.current = false;
-          addLog('Audio playback completed');
-        }
-      };
-
+      console.log('Audio nodes connected successfully');
       setIsRecording(true);
+      addLog('Started recording');
     } catch (error) {
-      console.error('Error in startRecording:', error);
-      addLog(`Error: ${error.message}`, 'error');
-      // Clean up any partially initialized resources
-      stopRecording();
+      console.error('Error starting recording:', error);
+      addLog(`Error starting recording: ${error.message}`, 'error');
+      
+      // Clean up any partial setup
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.disconnect();
+        sourceNodeRef.current = null;
+      }
+      if (workletNodeRef.current) {
+        workletNodeRef.current.disconnect();
+        workletNodeRef.current = null;
+      }
     }
   };
 
   const stopRecording = () => {
-    if (pingIntervalRef.current) {
-      clearInterval(pingIntervalRef.current);
-      pingIntervalRef.current = null;
-    }
-    hasPlaybackLatencyRef.current = false;
-    if (workletNodeRef.current) {
-      workletNodeRef.current.disconnect();
-    }
-    if (echoNodeRef.current) {
-      echoNodeRef.current.disconnect();
-    }
-    if (sourceNodeRef.current) {
-      sourceNodeRef.current.disconnect();
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
-    if (websocketRef.current) {
-      websocketRef.current.close();
-      websocketRef.current = null;
-    }
-    setIsRecording(false);
-  };
+    try {
+      if (workletNodeRef.current) {
+        workletNodeRef.current.disconnect();
+        workletNodeRef.current = null;
+      }
+      
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.disconnect();
+        sourceNodeRef.current = null;
+      }
 
-  const clearLogs = () => {
-    setLogs([]);
-  };
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
 
-  // Add this helper function before the return statement
-  const formatLatencyLog = (message: string) => {
-    // Check if it's a latency message with ":" or "-"
-    const splitChar = message.includes(':') ? ':' : message.includes('-') ? '-' : null;
-    if (!splitChar) return message;
-
-    const [label, values] = message.split(splitChar);
-    return (
-      <div className="grid grid-cols-[1fr,auto] gap-2">
-        <span>{label}{splitChar}</span>
-        <span className="font-mono">{values}</span>
-      </div>
-    );
-  };
-
-  // Update the handleInterrupt function
-  const handleInterrupt = () => {
-    // Stop current audio playback and clear queue
-    if (echoNodeRef.current) {
-      echoNodeRef.current.port.postMessage({ type: 'clear' });
-      echoNodeRef.current.port.postMessage({ type: 'mute' });
-      echoNodeRef.current.disconnect();
-      echoNodeRef.current.connect(audioContextRef.current!.destination);
-    }
-    audioQueueRef.current = [];
-
-    // Reset playback state
-    playbackStartTimeRef.current = null;
-    hasPlaybackLatencyRef.current = false;
-    isPlayingRef.current = false;
-  };
-
-  // Add scroll event handlers
-  const handleChatScroll = () => {
-    if (!chatHistoryRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = chatHistoryRef.current;
-    // Consider "at bottom" if within 100 pixels of the bottom
-    shouldAutoScrollChatRef.current = scrollHeight - (scrollTop + clientHeight) < 100;
-  };
-
-  const handleLogsScroll = () => {
-    if (!logsRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = logsRef.current;
-    // Consider "at bottom" if within 100 pixels of the bottom
-    shouldAutoScrollLogsRef.current = scrollHeight - (scrollTop + clientHeight) < 100;
-  };
-
-  // Add scroll to bottom functions
-  const scrollChatToBottom = () => {
-    if (chatHistoryRef.current && shouldAutoScrollChatRef.current) {
-      chatHistoryRef.current.scrollTop = chatHistoryRef.current.scrollHeight;
+      setIsRecording(false);
+      addLog('Stopped recording');
+    } catch (error) {
+      console.error('Error stopping recording:', error);
+      addLog(`Error stopping recording: ${error.message}`, 'error');
     }
   };
 
-  const scrollLogsToBottom = () => {
-    if (logsRef.current && shouldAutoScrollLogsRef.current) {
-      logsRef.current.scrollTop = logsRef.current.scrollHeight;
+  const startGame = async () => {
+    try {
+      // Setup audio first
+      await setupAudioWithRetry();
+      
+      // Only start the game if audio setup was successful
+      if (websocketRef.current?.readyState === WebSocket.OPEN) {
+        websocketRef.current.send(JSON.stringify({
+          type: 'start_game',
+          playerId: 'human_player'
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to start game:', error);
+      addLog('Error: Failed to start game. Please refresh and try again.', 'error');
     }
   };
 
-  // Update useEffect to scroll when chat history or logs change
-  useEffect(() => {
-    scrollChatToBottom();
-  }, [chatHistory]);
+  // Move setupAudio and setupAudioWithRetry outside useEffect
+  const setupAudio = async () => {
+    try {
+      console.log('Requesting initial microphone permission...');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      // Stop the stream immediately, we'll recreate it when needed
+      stream.getTracks().forEach(track => track.stop());
+      console.log('Microphone permission granted');
 
-  useEffect(() => {
-    scrollLogsToBottom();
-  }, [logs]);
+      // Initialize audio context
+      audioContextRef.current = new AudioContext();
+      console.log('AudioContext created');
+      
+      // Resume audio context (browsers require user interaction)
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+        console.log('AudioContext resumed');
+      }
+      
+      // Load audio worklet
+      try {
+        const baseUrl = window.location.origin;
+        const workletUrl = `${baseUrl}/audioWorklet.js`;
+        console.log('Loading audio worklet module from:', workletUrl);
+        
+        // Wait for the module to load
+        await audioContextRef.current.audioWorklet.addModule(workletUrl);
+        console.log('AudioWorklet module loaded successfully');
+
+        // Create the echo processor node
+        console.log('Creating echo processor...');
+        if (!audioContextRef.current) {
+          throw new Error('Audio context was closed');
+        }
+        
+        echoNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'echo-processor', {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1]
+        });
+        
+        if (!echoNodeRef.current) {
+          throw new Error('Failed to create echo processor node');
+        }
+        
+        echoNodeRef.current.connect(audioContextRef.current.destination);
+        echoNodeRef.current.port.postMessage({ type: 'setSpeed', speed: 0.4 });
+        console.log('Echo processor created and connected successfully');
+        
+        // Add error handler for the worklet
+        echoNodeRef.current.port.onmessageerror = (event) => {
+          console.error('Error in echo processor:', event);
+        };
+      } catch (workletError) {
+        console.error('Error loading audio worklet:', workletError);
+        throw new Error(`Failed to initialize audio worklet: ${workletError.message}`);
+      }
+    } catch (error) {
+      console.error('Error setting up audio:', error);
+      addLog(`Error: Audio setup failed - ${error.message}. Please refresh and try again.`, 'error');
+      throw error;
+    }
+  };
+
+  const setupAudioWithRetry = async (retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        await setupAudio();
+        return;
+      } catch (error) {
+        console.error(`Audio setup attempt ${i + 1} failed:`, error);
+        if (i === retries - 1) {
+          addLog('Error: Failed to set up audio after multiple attempts. Please refresh the page.', 'error');
+          throw error;
+        } else {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    }
+  };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-100 p-2 sm:p-4">
-      {/* Top Controls */}
-      <div className="mb-4 flex flex-col sm:flex-row justify-center gap-2 sm:gap-4">
-        <Button
-          onClick={isRecording ? stopRecording : startRecording}
-          variant={isRecording ? "destructive" : "default"}
-          className={`px-4 sm:px-8 py-4 sm:py-6 text-base sm:text-lg font-semibold flex items-center justify-center gap-2 ${
-            !isRecording ? 'bg-green-600 hover:bg-green-700' : ''
-          }`}
-        >
-          {isRecording ? (
-            <>
-              <MicOff className="w-5 h-5 sm:w-6 sm:h-6" />
-              Stop Recording
-            </>
+    <div className={styles.container}>
+      {notification && (
+        <div className={styles.notification}>
+          {notification}
+        </div>
+      )}
+      <main className={styles.main}>
+        <h1 className={styles.title}>
+          Werewolf Live Audio Game
+        </h1>
+
+        <div className={styles.gameControls}>
+          {!isGameStarted ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Welcome to Werewolf Live Audio Game</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className={styles.welcomeText}>
+                  Join an immersive game of deception and deduction where your voice is your most powerful tool.
+                </p>
+                <button 
+                  className={`${styles.button} ${styles.buttonStart}`}
+                  onClick={startGame}
+                  disabled={!isConnected}
+                >
+                  {isConnected ? 'Start New Game' : 'Connecting...'}
+                </button>
+              </CardContent>
+            </Card>
           ) : (
-            <>
-              <Mic className="w-5 h-5 sm:w-6 sm:h-6" />
-              Start Recording
-            </>
-          )}
-        </Button>
-        <Button
-          onClick={clearLogs}
-          variant="outline"
-          className="px-4 sm:px-8 py-4 sm:py-6 text-base sm:text-lg font-semibold flex items-center justify-center gap-2"
-        >
-          <Trash2 className="w-5 h-5 sm:w-6 sm:h-6" />
-          Clear Logs
-        </Button>
-      </div>
-
-      {/* Mobile Tabs - Only show on small screens */}
-      <div className="lg:hidden mb-2">
-        <div className="flex border-b border-gray-200">
-          <TabButton 
-            active={activeTab === 'chat'} 
-            onClick={() => setActiveTab('chat')}
-          >
-            Chat History
-          </TabButton>
-          <TabButton 
-            active={activeTab === 'logs'} 
-            onClick={() => setActiveTab('logs')}
-          >
-            Logs
-          </TabButton>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex flex-col lg:flex-row flex-1 gap-2 sm:gap-4">
-        {/* Chat History Panel */}
-        <div className={`w-full lg:w-1/2 h-[calc(100vh-12rem)] lg:h-[calc(90vh-5rem)] ${
-          activeTab === 'chat' ? 'block' : 'hidden lg:block'
-        }`}>
-          <Card className="h-full">
-            <CardHeader className="pb-2 hidden lg:block">
-              <CardTitle className="text-center text-base sm:text-lg">Chat History</CardTitle>
-            </CardHeader>
-            <CardContent 
-              ref={chatHistoryRef}
-              onScroll={handleChatScroll}
-              className="h-full lg:h-[calc(100%-3rem)] overflow-y-auto pt-4 lg:pt-0"
-            >
-              <div className="flex flex-col space-y-4">
-                {chatHistory.map((message, index) => (
-                  <div
-                    key={index}
-                    className={`flex ${
-                      message.role === 'assistant' ? 'bg-gray-50' : 
-                      message.role === 'transcript' ? 'bg-blue-50' :
-                      'bg-white'
-                    } p-3 sm:p-4 rounded-lg animate-slide-in`}
+            <div className={styles.gameStatus}>
+              <div className={styles.statusGrid}>
+                <div className={styles.statusItem}>
+                  <h3>Game Phase</h3>
+                  <p>{gamePhase}</p>
+                </div>
+                <div className={styles.statusItem}>
+                  <h3>Your Role</h3>
+                  <p style={{ color: playerRole ? getSpeakerColor(playerRole) : 'inherit' }}>
+                    {playerRole || 'Not assigned'}
+                  </p>
+                </div>
+                <div className={styles.statusItem}>
+                  <h3>Current Speaker</h3>
+                  <p>{currentSpeakerInfo ? getSpeakerDisplayName(currentSpeakerInfo) : ''}</p>
+                </div>
+              </div>
+              {isPlayerTurn && (
+                <div className={styles.playerControls}>
+                  <button
+                    className={`${styles.button} ${isRecording ? styles.buttonStop : styles.buttonStart}`}
+                    onClick={isRecording ? stopRecording : startRecording}
                   >
-                    <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full flex-shrink-0 mr-3 sm:mr-4">
-                      {message.role === 'assistant' ? (
-                        <div className="w-full h-full bg-green-600 rounded-full flex items-center justify-center text-white text-xs sm:text-sm">
-                          AI
-                        </div>
-                      ) : message.role === 'transcript' ? (
-                        <div className="w-full h-full bg-blue-600 rounded-full flex items-center justify-center text-white text-xs sm:text-sm">
-                          T
-                        </div>
-                      ) : (
-                        <div className="w-full h-full bg-gray-600 rounded-full flex items-center justify-center text-white text-xs sm:text-sm">
-                          U
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex-1 prose prose-sm dark:prose-invert prose-p:my-3 prose-headings:mb-3 prose-headings:mt-6 prose-li:my-2 prose-pre:bg-gray-800 prose-pre:text-gray-100 max-w-none">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          code: CodeBlock,
-                        }}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
-                      {message.role === 'transcript' && !message.isFinal && (
-                        <span className="text-xs text-gray-500 ml-2 animate-fade-in">(typing...)</span>
-                      )}
-                    </div>
+                    {isRecording ? (
+                      <>
+                        <MicOff className={styles.buttonIcon} />
+                        Stop Speaking
+                      </>
+                    ) : (
+                      <>
+                        <Mic className={styles.buttonIcon} />
+                        Start Speaking
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className={styles.logs}>
+          <div className={styles.logsHeader}>
+            <h2>Game Log</h2>
+          </div>
+          <div className={styles.logContent}>
+            {logs.map((log, index) => {
+              if (currentSpeakerInfo && !log.startsWith('[latency]')) {
+                const color = getSpeakerColor(currentSpeakerInfo.role);
+                return (
+                  <div key={index} className={styles.logEntry} style={{ borderLeft: `4px solid ${color}` }}>
+                    <span className={styles.speakerName} style={{ color }}>
+                      {getSpeakerDisplayName(currentSpeakerInfo)}
+                    </span>
+                    <span className={styles.logMessage}>
+                      {log.replace(/^\[[^\]]+\]\s*/, '')}
+                    </span>
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+                );
+              }
+              return (
+                <div key={index} className={styles.logEntry}>
+                  <span className={styles.logMessage}>{log}</span>
+                </div>
+              );
+            })}
+            <div ref={logsEndRef} />
+          </div>
         </div>
-
-        {/* Logs Panel */}
-        <div className={`w-full lg:w-1/2 h-[calc(100vh-12rem)] lg:h-[calc(90vh-5rem)] ${
-          activeTab === 'logs' ? 'block' : 'hidden lg:block'
-        }`}>
-          <Card className="h-full overflow-hidden">
-            <CardHeader className="pb-2 hidden lg:block">
-              <CardTitle className="text-center text-base sm:text-lg">Logs</CardTitle>
-            </CardHeader>
-            <CardContent 
-              ref={logsRef}
-              onScroll={handleLogsScroll}
-              className="h-full lg:h-[calc(100%-3rem)] bg-gray-900 p-2 lg:p-3 overflow-y-auto"
-            >
-              <div className="font-mono text-xs sm:text-sm">
-                {logs.map((log, index) => {
-                  const time = new Date(log.timestamp).toISOString().split('T')[1].slice(0, -1);
-                  const baseClasses = "mb-1 font-mono";
-                  
-                  const typeClasses = {
-                    error: "text-red-400",
-                    latency: "text-cyan-400",
-                    llm: "text-green-400",
-                    info: "text-gray-300"
-                  };
-
-                  // Special styling for different event types
-                  const prefixColor = {
-                    vad: "text-purple-400",
-                    asr: "text-yellow-400",
-                    server: "text-blue-400"
-                  };
-
-                  let content = log.message;
-                  let prefix = null;
-
-                  // Extract prefix if message starts with [Something]
-                  const prefixMatch = log.message.match(/^\[(.*?)\]/);
-                  if (prefixMatch) {
-                    prefix = prefixMatch[0];
-                    content = log.message.slice(prefix.length);
-                  }
-
-                  return (
-                    <div key={index} className={`${baseClasses} ${typeClasses[log.type]}`}>
-                      <span className="text-gray-500">[{time}]</span>{' '}
-                      {prefix && (
-                        <span className={
-                          Object.entries(prefixColor).find(([key]) => 
-                            prefix?.toLowerCase().includes(key))?.[1] || typeClasses[log.type]
-                          }>
-                          {prefix}
-                        </span>
-                      )}
-                      {log.type === 'latency' ? (
-                        formatLatencyLog(content)
-                      ) : (
-                        <span>{content}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      </main>
     </div>
   );
 }

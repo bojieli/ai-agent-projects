@@ -103,13 +103,14 @@ class EchoProcessor extends AudioWorkletProcessor {
     this.audioBuffer = [];
     this.playbackPosition = 0;
     this.isPlaying = false;
-    this.sampleRate = 16000;
+    this.sampleRate = 16000;  // Input sample rate
     this.isMuted = false;
     this.outputBufferSize = 2048;
     this.outputBuffer = new Float32Array(this.outputBufferSize);
     this.outputBufferPosition = 0;
-    this.hasNotifiedQueueEmpty = false;  // Track if we've sent the queue empty notification
-
+    this.hasNotifiedQueueEmpty = false;
+    this.playbackSpeed = 0.5;  // Slow down playback to 0.5x speed
+    
     this.port.onmessage = (event) => {
       if (event.data instanceof Float32Array) {
         if (!this.isMuted) {
@@ -121,7 +122,7 @@ class EchoProcessor extends AudioWorkletProcessor {
             this.audioBuffer = Array.from(newBuffer);
             this.playbackPosition = 0;
             this.outputBufferPosition = 0;
-            this.hasNotifiedQueueEmpty = false;  // Reset notification flag when starting new playback
+            this.hasNotifiedQueueEmpty = false;
           } else {
             this.audioBuffer.push(...Array.from(newBuffer));
           }
@@ -129,14 +130,12 @@ class EchoProcessor extends AudioWorkletProcessor {
           this.isPlaying = true;
         }
       } else if (event.data.type === 'clear') {
-        // Clear the buffer and stop playback
         this.audioBuffer = [];
         this.playbackPosition = 0;
         this.outputBufferPosition = 0;
         this.isPlaying = false;
         this.isMuted = true;
         this.hasNotifiedQueueEmpty = false;
-        // Notify that the queue is empty after clearing
         this.port.postMessage({ type: 'queue_empty' });
       } else if (event.data.type === 'unmute') {
         this.isMuted = false;
@@ -147,8 +146,9 @@ class EchoProcessor extends AudioWorkletProcessor {
         this.playbackPosition = 0;
         this.isPlaying = false;
         this.hasNotifiedQueueEmpty = false;
-        // Notify that the queue is empty after muting
         this.port.postMessage({ type: 'queue_empty' });
+      } else if (event.data.type === 'setSpeed') {
+        this.playbackSpeed = event.data.speed;
       }
     };
   }
@@ -156,13 +156,11 @@ class EchoProcessor extends AudioWorkletProcessor {
   process(inputs, outputs, parameters) {
     const output = outputs[0];
     
-    // If muted or not playing, output silence
     if (this.isMuted || !this.isPlaying || this.audioBuffer.length === 0) {
       for (let channel = 0; channel < output.length; channel++) {
         output[channel].fill(0);
       }
       
-      // Send queue_empty notification if we haven't already
       if (this.isPlaying && !this.hasNotifiedQueueEmpty) {
         this.port.postMessage({ type: 'queue_empty' });
         this.hasNotifiedQueueEmpty = true;
@@ -176,22 +174,29 @@ class EchoProcessor extends AudioWorkletProcessor {
     const bufferSize = outputChannel.length;
     
     if (this.isPlaying && this.audioBuffer.length > 0) {
-      // Fill the output buffer
+      // Interpolate samples for speed adjustment
       for (let i = 0; i < bufferSize; i++) {
-        if (this.playbackPosition < this.audioBuffer.length) {
-          const sample = this.audioBuffer[this.playbackPosition];
+        const position = Math.floor(this.playbackPosition);
+        if (position < this.audioBuffer.length) {
+          // Linear interpolation for smoother playback
+          const fraction = this.playbackPosition - position;
+          const currentSample = this.audioBuffer[position];
+          const nextSample = position + 1 < this.audioBuffer.length ? 
+            this.audioBuffer[position + 1] : currentSample;
+          
+          const interpolatedSample = currentSample + fraction * (nextSample - currentSample);
+          
           for (let channel = 0; channel < output.length; channel++) {
-            output[channel][i] = sample;
+            output[channel][i] = interpolatedSample;
           }
-          this.playbackPosition++;
+          
+          this.playbackPosition += this.playbackSpeed;
         } else {
-          // End of buffer reached
           for (let channel = 0; channel < output.length; channel++) {
             output[channel][i] = 0;
           }
           
-          // If we've played everything, reset and notify
-          if (this.playbackPosition >= this.audioBuffer.length && !this.hasNotifiedQueueEmpty) {
+          if (!this.hasNotifiedQueueEmpty) {
             this.isPlaying = false;
             this.playbackPosition = 0;
             this.audioBuffer = [];
@@ -201,7 +206,6 @@ class EchoProcessor extends AudioWorkletProcessor {
         }
       }
     } else {
-      // Output silence if we're not playing
       for (let channel = 0; channel < output.length; channel++) {
         output[channel].fill(0);
       }
