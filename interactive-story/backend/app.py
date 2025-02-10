@@ -14,6 +14,12 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# OpenAI API Key
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+if not OPENAI_API_KEY or OPENAI_API_KEY == "<token>":
+    print("错误: OPENAI_API_KEY 环境变量未设置或未正确配置。请设置 OPENAI_API_KEY 环境变量！")
+    sys.exit(1)
+
 app = Flask(__name__, static_folder="../frontend", static_url_path="")
 
 # 全局内存存储游戏会话（仅用于演示，不适合生产环境）
@@ -91,9 +97,26 @@ stories_path = os.path.join(os.path.dirname(__file__), "stories.json")
 with open(stories_path, "r", encoding="utf-8") as f:
     stories_data = json.load(f)
 
-async def generate_text_async_stream(prompt, model):
+async def generate_text_async_stream(prompt, model=None):
     """Streaming version that yields tokens"""
-    if model == "deepseek-ai/DeepSeek-R1":
+    if not model:
+        model = "openai/o3-mini"  # Default to OpenAI o3-mini
+        
+    if model.startswith("openai/"):
+        payload = {
+            "model": model.replace("openai/", ""),
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+            "max_tokens": 4096,
+        }
+        headers = {
+            "Authorization": "Bearer " + OPENAI_API_KEY,
+            "Content-Type": "application/json"
+        }
+        async for token in try_provider_http_stream("https://api.openai.com/v1/chat/completions", payload, headers):
+            yield token
+        return
+    elif model == "deepseek-ai/DeepSeek-R1":
         providers = ["doubao", "siliconflow", "deepseek_official"]
         last_exception = None
         for provider in providers:
@@ -166,7 +189,7 @@ async def generate_text_async(prompt, model):
 
 def generate_text(prompt, model=None):
     if model is None:
-        model = "deepseek-ai/DeepSeek-V3"
+        model = "openai/o3-mini"  # Default to OpenAI o3-mini
     return asyncio.run(generate_text_async(prompt, model))
 
 async def try_provider_http_stream(api_url, payload, headers):
@@ -735,4 +758,4 @@ def update_chat_history():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8888, threaded=True) 
+    app.run(debug=True, port=8888, threaded=True)
