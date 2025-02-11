@@ -178,52 +178,48 @@ export default function Home() {
     ws.onmessage = async (event) => {
       try {
         if (event.data instanceof Blob) {
-          // Handle binary audio data
           const arrayBuffer = await event.data.arrayBuffer();
           const now = Date.now();
-          
-          if (!audioFormatRef.current) {
-            console.log('Warning: audioFormatRef is not set');
-            return;
-          }
-          
-          const int16Array = new Int16Array(arrayBuffer);
-          const float32Array = new Float32Array(int16Array.length);
-          
-          // Convert Int16 to Float32
-          for (let i = 0; i < int16Array.length; i++) {
-            float32Array[i] = int16Array[i] / 32768.0;
-          }
-          
-          if (!echoNodeRef.current) {
-            console.log('Warning: echoNodeRef is not set');
-            return;
-          }
-          
-          // Send unmute command only if not already playing
-          if (!isPlayingRef.current) {
-            console.log('Sending unmute command to echo processor');
-            echoNodeRef.current.port.postMessage({ type: 'unmute' });
-            isPlayingRef.current = true;
-          }
-          
-          // Send audio data to echo processor
-          echoNodeRef.current.port.postMessage(float32Array);
-          
-          // Calculate latency if needed
-          if (vadEndTimeRef.current && !hasPlaybackLatencyRef.current) {
-            const latency = now - vadEndTimeRef.current;
-            const serverVadLatency = now - (speechEndTimeRef.current || vadEndTimeRef.current);
-            addLog(`First audio playback latency - Browser VAD: ${latency}ms`, 'latency');
-            addLog(`First audio playback latency - Server VAD: ${serverVadLatency}ms`, 'latency');
-            hasPlaybackLatencyRef.current = true;
+
+          if (audioFormatRef.current) {
+            const int16Array = new Int16Array(arrayBuffer);
+            const float32Array = new Float32Array(int16Array.length);
+            
+            for (let i = 0; i < int16Array.length; i++) {
+              float32Array[i] = int16Array[i] / 32768.0;
+            }
+            
+            if (echoNodeRef.current) {
+              // Set playback start time when first audio chunk is received
+              if (!playbackStartTimeRef.current) {
+                playbackStartTimeRef.current = Date.now();
+              }
+
+              echoNodeRef.current.port.postMessage({ type: 'unmute' });
+              
+              if (vadEndTimeRef.current && !hasPlaybackLatencyRef.current) {
+                const latency = now - vadEndTimeRef.current;
+                const serverVadLatency = now - (speechEndTimeRef.current || vadEndTimeRef.current);
+                addLog(`First audio playback latency - Browser VAD: ${latency}ms`, 'latency');
+                addLog(`First audio playback latency - Server VAD: ${serverVadLatency}ms`, 'latency');
+                hasPlaybackLatencyRef.current = true;
+              }
+              echoNodeRef.current.port.postMessage(float32Array);
+            }
           }
         } else {
           // Handle JSON messages
           const jsonMessage = JSON.parse(event.data);
-          console.log('Received message:', jsonMessage);
           
           switch (jsonMessage.type) {
+            case 'audio_start':
+              handleAudioStart(jsonMessage.format);
+              break;
+            
+            case 'audio_end':
+              addLog('Audio streaming completed');
+              break;
+            
             case 'speaker_info':
               setCurrentSpeakerInfo({
                 speaker: jsonMessage.speaker,
@@ -260,11 +256,6 @@ export default function Home() {
               addLog(`Game ended! ${jsonMessage.winner} won!`);
               break;
 
-            case 'audio_start':
-              handleAudioStart(jsonMessage.format);
-              break;
-
-            case 'audio_end':
             case 'tts_start':
             case 'tts_complete':
               // These are informational messages, we can log them if needed
@@ -277,6 +268,7 @@ export default function Home() {
         }
       } catch (error) {
         console.error('Error processing message:', error);
+        addLog(`Error processing message: ${error}`, 'error');
       }
     };
   };
@@ -311,112 +303,128 @@ export default function Home() {
 
   const startRecording = async () => {
     try {
-      if (!audioContextRef.current) {
-        await setupAudioWithRetry();
+      // Setup WebSocket first
+      setupWebSocket();
+      
+      // Check if AudioContext and AudioWorklet are supported
+      if (!window.AudioContext && !(window as any).webkitAudioContext) {
+        throw new Error('AudioContext is not supported in this browser');
       }
 
-      if (audioContextRef.current?.state === 'suspended') {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      
+      // Create AudioContext with specific sample rate
+      audioContextRef.current = new AudioContextClass({
+        sampleRate: 16000
+      });
+      
+      // Check if audioWorklet is supported
+      if (!audioContextRef.current.audioWorklet) {
+        throw new Error('AudioWorklet is not supported in this browser. Please use a modern browser like Chrome or Firefox.');
+      }
+      
+      // Resume the audio context first (needed for some browsers)
+      if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
       }
       
-      streamRef.current = await navigator.mediaDevices.getUserMedia({
+      try {
+        // Add the audio worklet module with the full URL path
+        const workletUrl = new URL('/audioWorklet.js', window.location.origin).href;
+        
+        // Add a timeout to the worklet loading
+        const workletLoadPromise = audioContextRef.current.audioWorklet.addModule(workletUrl);
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Audio worklet load timeout')), 5000);
+        });
+        
+        await Promise.race([workletLoadPromise, timeoutPromise]);
+        
+      } catch (workletError) {
+        console.error('Error loading audio worklet:', workletError);
+        throw new Error(`Failed to load audio worklet module: ${workletError.message}`);
+      }
+
+      // Get user media
+      streamRef.current = await navigator.mediaDevices.getUserMedia({ 
         audio: {
+          channelCount: 1,
+          sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true
-        }
+        } 
       });
-      
+
+      // Set up audio nodes
       sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(streamRef.current);
+      workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
+      echoNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'echo-processor');
       
-      workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'audio-processor', {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
-        processorOptions: {
-          sampleRate: audioContextRef.current.sampleRate
-        }
-      });
-      
+      // Connect nodes: source -> worklet -> destination
       sourceNodeRef.current.connect(workletNodeRef.current);
-      workletNodeRef.current.connect(audioContextRef.current.destination);
+      echoNodeRef.current.connect(audioContextRef.current.destination);
 
       // Handle audio data from the worklet
       workletNodeRef.current.port.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) {
-          // Send audio data to backend
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
             websocketRef.current.send(event.data);
           }
         } else if (event.data.type === 'vad') {
           if (event.data.status === 'speech_start') {
             vadStartTimeRef.current = Date.now();
-            if (websocketRef.current?.readyState === WebSocket.OPEN) {
-              websocketRef.current.send(JSON.stringify({
-                type: 'speech_event',
-                status: 'start'
-              }));
-            }
+            addLog('[Frontend VAD] Start of speech detected');
           } else if (event.data.status === 'speech_end') {
             vadEndTimeRef.current = Date.now();
             hasPlaybackLatencyRef.current = false;
-            if (websocketRef.current?.readyState === WebSocket.OPEN) {
-              websocketRef.current.send(JSON.stringify({
-                type: 'speech_event',
-                status: 'end'
-              }));
-            }
+            addLog('[Frontend VAD] End of speech detected');
           }
         }
       };
 
-      workletNodeRef.current.port.onmessageerror = (error) => {
-        console.error('Error in audio processor:', error);
-        addLog('Error processing audio data', 'error');
+      // Add message handler for the echo node
+      echoNodeRef.current.port.onmessage = (event) => {
+        if (event.data.type === 'queue_empty' && isPlayingRef.current) {
+          isPlayingRef.current = false;
+          // Reset playback state
+          playbackStartTimeRef.current = null;
+          hasPlaybackLatencyRef.current = false;
+          addLog('Audio playback completed');
+        }
       };
 
       setIsRecording(true);
     } catch (error) {
-      console.error('Error starting recording:', error);
-      addLog(`Error starting recording: ${error.message}`, 'error');
-      
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (sourceNodeRef.current) {
-        sourceNodeRef.current.disconnect();
-        sourceNodeRef.current = null;
-      }
-      if (workletNodeRef.current) {
-        workletNodeRef.current.disconnect();
-        workletNodeRef.current = null;
-      }
+      console.error('Error in startRecording:', error);
+      addLog(`Error: ${error.message}`, 'error');
+      // Clean up any partially initialized resources
+      stopRecording();
     }
   };
 
   const stopRecording = () => {
-    try {
-      if (workletNodeRef.current) {
-        workletNodeRef.current.disconnect();
-        workletNodeRef.current = null;
-      }
-      
-      if (sourceNodeRef.current) {
-        sourceNodeRef.current.disconnect();
-        sourceNodeRef.current = null;
-      }
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-
-      setIsRecording(false);
-    } catch (error) {
-      console.error('Error stopping recording:', error);
-      addLog(`Error stopping recording: ${error.message}`, 'error');
+    if (workletNodeRef.current) {
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
     }
+    if (echoNodeRef.current) {
+      echoNodeRef.current.disconnect();
+      echoNodeRef.current = null;
+    }
+    if (sourceNodeRef.current) {
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    setIsRecording(false);
   };
 
   const startGame = async () => {

@@ -671,10 +671,10 @@ class ConnectionHandler {
           url: config.TTS_API_URL,
           data: {
             "model": "fishaudio/fish-speech-1.5",
-            "input": text,
+            "input": processedText,
             "voice": "fishaudio/fish-speech-1.5:diana",
-            "response_format": "mp3",
-            "sample_rate": 32000,
+            "response_format": "wav",
+            "sample_rate": 16000,
             "stream": true,
             "speed": 1,
             "gain": 0
@@ -685,7 +685,25 @@ class ConnectionHandler {
           },
           responseType: 'stream',
           cancelToken: this.currentTTSRequest.token,
+          validateStatus: null
         });
+
+        // If the response status is not 200, handle the error
+        if (response.status !== 200) {
+          // Convert stream to string to get error details
+          const chunks = [];
+          for await (const chunk of response.data) {
+            chunks.push(chunk);
+          }
+          const responseBody = Buffer.concat(chunks).toString('utf8');
+          console.error('TTS API Error Response:', {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+            body: responseBody
+          });
+          throw new Error(`TTS API Error (${response.status}): ${responseBody}`);
+        }
 
         let headerBuffer = Buffer.alloc(0);
         let headerSent = false;
