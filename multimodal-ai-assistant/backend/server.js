@@ -26,6 +26,7 @@ class ConnectionHandler {
     this.messageHistory = [];
     this.asrWs = null;
     this.currentLLMRequest = null;
+    this.latestImage = null;
     this.currentTTSRequest = null;
     this.isASRConnected = false;
     this.lastProcessedTranscript = null;
@@ -72,6 +73,22 @@ class ConnectionHandler {
       const jsonMessage = JSON.parse(message);
       
       // Handle ping message by sending back pong with same timestamp
+      if (jsonMessage.type === 'ping') {
+        this.ws.send(JSON.stringify({
+          type: 'pong',
+          timestamp: jsonMessage.timestamp
+        }));
+        return;
+      }
+
+      // Handle image message
+      if (jsonMessage.type === 'image') {
+        this.latestImage = jsonMessage.data;
+        console.log('Received new image from camera');
+        return;
+      }
+
+      // Handle other ping message by sending back pong with same timestamp
       if (jsonMessage.type === 'ping') {
         this.ws.send(JSON.stringify({
           type: 'pong',
@@ -296,10 +313,37 @@ class ConnectionHandler {
       
       // Keep only the last 20 messages for context
       const recentHistory = this.messageHistory.slice(-20);
-      const messages = [
+      let messages = [
         { role: 'system', content: config.SYSTEM_PROMPT },
         ...recentHistory.map(({ role, content }) => ({ role, content }))
       ];
+
+      // If we have a latest image, include it in the messages
+      if (this.latestImage) {
+        // Find the last user message
+        const lastUserMessageIndex = messages.findIndex(msg => msg.role === 'user');
+        if (lastUserMessageIndex !== -1) {
+          // Add image to the user's message
+          messages[lastUserMessageIndex] = {
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: {
+                  url: this.latestImage,
+                  detail: 'low'
+                }
+              },
+              {
+                type: 'text',
+                text: messages[lastUserMessageIndex].content
+              }
+            ]
+          };
+        }
+        // Clear the image after using it
+        this.latestImage = null;
+      }
 
       // Add initial empty assistant message
       this.messageHistory.push({
@@ -316,7 +360,8 @@ class ConnectionHandler {
         {
           model: config.LLM_MODEL,
           messages: messages,
-          stream: true
+          stream: true,
+          max_tokens: config.VISION_MAX_TOKENS
         },
         {
           headers: {

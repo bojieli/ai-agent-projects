@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Mic, MicOff, Trash2 } from 'lucide-react';
+import { Camera } from '../components/Camera';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -17,6 +18,7 @@ interface ChatMessage {
   role: 'user' | 'assistant' | 'transcript';
   content: string;
   isFinal?: boolean;
+  image?: string;
 }
 
 interface TabButtonProps {
@@ -541,8 +543,22 @@ export default function Home() {
     scrollLogsToBottom();
   }, [logs]);
 
+  const handleImageCapture = (imageData: string) => {
+    // Send image to backend via WebSocket
+    if (websocketRef.current?.readyState === WebSocket.OPEN) {
+      websocketRef.current.send(JSON.stringify({
+        type: 'image',
+        data: imageData,
+        timestamp: Date.now()
+      }));
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-gray-100 p-2 sm:p-4">
+      <div className="mb-4">
+        <Camera onImageCapture={handleImageCapture} />
+      </div>
       {/* Top Controls */}
       <div className="mb-4 flex flex-col sm:flex-row justify-center gap-2 sm:gap-4">
         <Button
