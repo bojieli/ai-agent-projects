@@ -126,14 +126,6 @@ class VoiceActivityDetector {
           this.speechBuffer = Buffer.concat([this.speechBuffer, frame]);
         }
       }
-      
-      results.push({
-        type: 'frame_processed',
-        isVoiceActive,
-        energy: smoothedEnergy,
-        isSpeaking: this.isSpeaking,
-        timestamp: currentTime
-      });
     }
     
     return results;

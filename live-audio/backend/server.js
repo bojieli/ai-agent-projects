@@ -197,15 +197,6 @@ class ConnectionHandler {
         if (result.type === 'speech_end') {
           // Speech segment ended, process with STT
           await this.processSpeechSegment(result.audioData, result.duration);
-        } else if (result.type === 'frame_processed') {
-          // Send VAD status to client
-          this.ws.send(JSON.stringify({
-            type: 'vad_status',
-            isVoiceActive: result.isVoiceActive,
-            isSpeaking: result.isSpeaking,
-            energy: result.energy,
-            timestamp: result.timestamp
-          }));
         }
       }
     } catch (error) {

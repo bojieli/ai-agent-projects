@@ -300,6 +300,10 @@ export default function Home() {
               addLog(jsonData.message, 'info');
               break;
             
+            case 'vad_status':
+              // Silently ignore VAD status messages to reduce log noise
+              break;
+            
             default:
               addLog(`Received message: ${JSON.stringify(jsonData)}`);
           }
