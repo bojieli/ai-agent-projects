@@ -17,13 +17,13 @@ The system consists of a frontend-backend architecture with real-time audio proc
 
 ### Frontend (Next.js)
 - **Audio Capture**: Uses Web Audio API to capture microphone input
-- **Voice Activity Detection**: Client-side VAD using AudioWorklet for debugging only
+- **Audio Processing**: Client-side audio processing and streaming to backend
 - **WebSocket Communication**: Sends audio stream to backend and receives responses
 - **Audio Playback**: Plays back TTS audio responses from the backend
 
 ### Backend (Node.js)
 - **WebSocket Server**: Handles real-time audio streaming and client connections
-- **Voice Activity Detection**: Server-side VAD processing to detect speech boundaries
+- **Voice Activity Detection**: Server-side Silero VAD processing to detect speech boundaries with high accuracy
 - **Speech-to-Text**: Converts audio to text using OpenAI Whisper API
 - **LLM Processing**: Processes user input using OpenAI LLMs
 - **Text-to-Speech**: Converts AI responses to audio using SiliconFlow TTS API (Fish Audio TTS)
@@ -74,6 +74,19 @@ User Speech → WebSocket → Backend VAD → STT → LLM → TTS → Audio Resp
    ```bash
    cd frontend && npm install
    ```
+4. Download the Silero VAD model:
+   ```bash
+   cd backend/models
+   # Option 1: Download from Hugging Face
+   wget https://huggingface.co/deepghs/silero-vad-onnx/resolve/main/silero_vad.onnx
+   
+   # Option 2: Download from alternative source (if Option 1 fails)
+   wget https://raw.githubusercontent.com/IntendedConsequence/vadc/master/silero_vad_v3.onnx -O silero_vad.onnx
+   
+   # Option 3: Manual download
+   # Visit https://huggingface.co/deepghs/silero-vad-onnx/tree/main
+   # Download silero_vad.onnx and place it in backend/models/
+   ```
 
 ## Configuration
 
@@ -106,7 +119,7 @@ User Speech → WebSocket → Backend VAD → STT → LLM → TTS → Audio Resp
 The `config.js` file contains various settings you can customize:
 
 - **LLM Settings**: Model selection, API URLs, token limits
-- **VAD Settings**: Threshold, frame length, speech duration parameters
+- **Silero VAD Settings**: Threshold, frame length, speech duration parameters
 - **Audio Settings**: Sample rate, chunk size, quality parameters
 - **Server Settings**: Port, host, system prompt
 

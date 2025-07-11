@@ -150,9 +150,11 @@ class ConnectionHandler {
     this.lastAudioEndTime = null;
     this.audioTotalDuration = 0;
 
-    // Clean up VAD state
+    // Clean up VAD state (now async)
     if (this.vad) {
-      this.vad.reset();
+      this.vad.cleanup().catch(error => {
+        console.error('Error cleaning up VAD:', error);
+      });
     }
 
     // Clear cleanup interval
@@ -190,8 +192,8 @@ class ConnectionHandler {
    */
   async processAudioWithVAD(audioChunk) {
     try {
-      // Process audio through VAD
-      const vadResults = this.vad.processAudioChunk(audioChunk);
+      // Process audio through VAD (now async)
+      const vadResults = await this.vad.processAudioChunk(audioChunk);
       
       for (const result of vadResults) {
         if (result.type === 'speech_end') {

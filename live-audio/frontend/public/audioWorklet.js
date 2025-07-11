@@ -3,21 +3,8 @@ class AudioProcessor extends AudioWorkletProcessor {
     super();
     this.inputBuffer = [];
     
-    // VAD parameters
-    this.energyThreshold = 0.0001;  // Adjust this threshold based on testing
-    this.isSpeaking = false;
-    this.silenceStartTime = null;
-    this.requiredSilenceMs = 100;  // 100ms silence for speech end
-    this.consecutiveSilentFrames = 0;
-    this.lastFrameTime = null;
-  }
-
-  calculateEnergy(samples) {
-    let sum = 0;
-    for (let i = 0; i < samples.length; i++) {
-      sum += samples[i] * samples[i];
-    }
-    return sum / samples.length;
+    // Remove VAD parameters - now using server-side Silero VAD only
+    // The client-side VAD was primarily for debugging and is no longer needed
   }
 
   process(inputs, outputs, parameters) {
@@ -34,47 +21,7 @@ class AudioProcessor extends AudioWorkletProcessor {
       monoInput[i] = sum / input.length;
     }
 
-    // VAD processing
-    const energy = this.calculateEnergy(monoInput);
-    const currentTime = Date.now();
-    
-    if (energy > this.energyThreshold) {
-      // Reset silence detection when energy goes above threshold
-      this.consecutiveSilentFrames = 0;
-      this.silenceStartTime = null;
-      
-      if (!this.isSpeaking) {
-        this.isSpeaking = true;
-        this.port.postMessage({ type: 'vad', status: 'speech_start' });
-      }
-    } else if (this.isSpeaking) {
-      // Track consecutive silent frames
-      if (this.silenceStartTime === null) {
-        this.silenceStartTime = currentTime;
-      }
-      
-      // Ensure we're getting continuous frames
-      if (this.lastFrameTime && (currentTime - this.lastFrameTime) > 50) {
-        // Frame gap too large, reset silence detection
-        this.consecutiveSilentFrames = 0;
-        this.silenceStartTime = currentTime;
-      }
-      
-      this.consecutiveSilentFrames++;
-      
-      // Check if we have enough consecutive silent frames
-      const silenceDuration = currentTime - this.silenceStartTime;
-      if (silenceDuration >= this.requiredSilenceMs) {
-        this.isSpeaking = false;
-        this.silenceStartTime = null;
-        this.consecutiveSilentFrames = 0;
-        this.port.postMessage({ type: 'vad', status: 'speech_end' });
-      }
-    }
-    
-    this.lastFrameTime = currentTime;
-
-    // Process in chunks
+    // Process in chunks - removed VAD processing
     const CHUNK_SIZE = 1024;
     this.inputBuffer.push(...monoInput);
 
@@ -89,7 +36,7 @@ class AudioProcessor extends AudioWorkletProcessor {
         pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
 
-      // Send the data
+      // Send the data - server-side Silero VAD will handle speech detection
       this.port.postMessage(pcmData.buffer, [pcmData.buffer]);
     }
 

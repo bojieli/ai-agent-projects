@@ -191,19 +191,10 @@ class SpeechToTextService {
       return false;
     }
 
-    // Check for non-silent audio (simple energy check)
-    let hasSignificantEnergy = false;
-    for (let i = 0; i < audioBuffer.length; i += 2) {
-      if (i + 1 < audioBuffer.length) {
-        const sample = Math.abs(audioBuffer.readInt16LE(i));
-        if (sample > 1000) { // Threshold for non-silence
-          hasSignificantEnergy = true;
-          break;
-        }
-      }
-    }
-
-    return hasSignificantEnergy;
+    // Since we're using Silero VAD for speech detection, we trust its decision
+    // and only check for minimum duration. The energy check is redundant and
+    // can reject valid speech that Silero VAD correctly identified.
+    return true;
   }
 }
 
