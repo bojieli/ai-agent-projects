@@ -77,15 +77,7 @@ User Speech → WebSocket → Backend VAD → STT → LLM → TTS → Audio Resp
 4. Download the Silero VAD model:
    ```bash
    cd backend/models
-   # Option 1: Download from Hugging Face
    wget https://huggingface.co/deepghs/silero-vad-onnx/resolve/main/silero_vad.onnx
-   
-   # Option 2: Download from alternative source (if Option 1 fails)
-   wget https://raw.githubusercontent.com/IntendedConsequence/vadc/master/silero_vad_v3.onnx -O silero_vad.onnx
-   
-   # Option 3: Manual download
-   # Visit https://huggingface.co/deepghs/silero-vad-onnx/tree/main
-   # Download silero_vad.onnx and place it in backend/models/
    ```
 
 ## Configuration
