@@ -1,13 +1,43 @@
-const axios = require('axios');
-const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
+const { ASRProviderFactory } = require('./providers/asrProviders');
 
 class SpeechToTextService {
   constructor() {
     this.tempDir = path.join(__dirname, '../temp');
     this.ensureTempDirectory();
+    
+    // Initialize ASR provider based on configuration
+    this.initializeProvider();
+  }
+
+  /**
+   * Initialize ASR provider based on configuration
+   */
+  initializeProvider() {
+    try {
+      const providerName = config.ASR_PROVIDER || 'openai';
+      this.asrProvider = ASRProviderFactory.createProvider(providerName, config, config);
+      console.log(`ASR Provider initialized: ${providerName}`);
+    } catch (error) {
+      console.error('Failed to initialize ASR provider:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Switch ASR provider dynamically
+   * @param {string} providerName - Provider name to switch to
+   */
+  switchProvider(providerName) {
+    try {
+      this.asrProvider = ASRProviderFactory.createProvider(providerName, config, config);
+      console.log(`ASR Provider switched to: ${providerName}`);
+    } catch (error) {
+      console.error('Failed to switch ASR provider:', error);
+      throw error;
+    }
   }
 
   /**
@@ -20,128 +50,27 @@ class SpeechToTextService {
   }
 
   /**
-   * Convert raw audio buffer to WAV format
-   * @param {Buffer} audioBuffer - Raw PCM audio data
-   * @param {Object} options - Audio format options
-   * @returns {Buffer} WAV formatted audio data
-   */
-  createWavBuffer(audioBuffer, options = {}) {
-    const sampleRate = options.sampleRate || config.AUDIO_SAMPLE_RATE;
-    const channels = options.channels || 1;
-    const bitsPerSample = options.bitsPerSample || 16;
-    
-    const byteRate = sampleRate * channels * bitsPerSample / 8;
-    const blockAlign = channels * bitsPerSample / 8;
-    const dataSize = audioBuffer.length;
-    const fileSize = 36 + dataSize;
-    
-    const header = Buffer.alloc(44);
-    
-    // RIFF header
-    header.write('RIFF', 0);
-    header.writeUInt32LE(fileSize, 4);
-    header.write('WAVE', 8);
-    
-    // fmt chunk
-    header.write('fmt ', 12);
-    header.writeUInt32LE(16, 16); // PCM format chunk size
-    header.writeUInt16LE(1, 20);  // PCM format
-    header.writeUInt16LE(channels, 22);
-    header.writeUInt32LE(sampleRate, 24);
-    header.writeUInt32LE(byteRate, 28);
-    header.writeUInt16LE(blockAlign, 32);
-    header.writeUInt16LE(bitsPerSample, 34);
-    
-    // data chunk
-    header.write('data', 36);
-    header.writeUInt32LE(dataSize, 40);
-    
-    return Buffer.concat([header, audioBuffer]);
-  }
-
-  /**
-   * Transcribe audio using OpenAI Whisper API through OpenRouter
+   * Transcribe audio using the configured ASR provider
    * @param {Buffer} audioBuffer - Raw audio data
    * @param {Object} options - Transcription options
    * @returns {Promise<Object>} Transcription result
    */
   async transcribeAudio(audioBuffer, options = {}) {
+    if (!this.asrProvider) {
+      throw new Error('ASR provider not initialized');
+    }
+
     try {
-      // Create WAV buffer
-      const wavBuffer = this.createWavBuffer(audioBuffer, {
-        sampleRate: config.AUDIO_SAMPLE_RATE,
-        channels: 1,
-        bitsPerSample: 16
-      });
-
-      // Create temporary file
-      const tempFileName = `audio_${Date.now()}_${Math.random().toString(36).substring(2)}.wav`;
-      const tempFilePath = path.join(this.tempDir, tempFileName);
-      
-      // Write audio to temporary file
-      fs.writeFileSync(tempFilePath, wavBuffer);
-
-      try {
-        // Create form data
-        const formData = new FormData();
-        formData.append('file', fs.createReadStream(tempFilePath));
-        formData.append('model', config.STT_MODEL);
-        formData.append('response_format', 'json');
-        
-        if (options.language) {
-          formData.append('language', options.language);
-        }
-        
-        if (options.prompt) {
-          formData.append('prompt', options.prompt);
-        }
-
-        // Make API request
-        const response = await axios({
-          method: 'post',
-          url: config.STT_API_URL,
-          data: formData,
-          headers: {
-            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
-            ...formData.getHeaders()
-          },
-          timeout: 30000 // 30 second timeout
-        });
-
-        const result = {
-          success: true,
-          text: response.data.text || '',
-          language: response.data.language || 'unknown',
-          duration: response.data.duration || 0,
-          confidence: response.data.confidence || 1.0,
-          timestamp: Date.now()
-        };
-
-        console.log('STT Result:', {
-          text: result.text,
-          language: result.language,
-          duration: result.duration
-        });
-
-        return result;
-
-      } finally {
-        // Clean up temporary file
-        try {
-          fs.unlinkSync(tempFilePath);
-        } catch (cleanupError) {
-          console.warn('Failed to cleanup temp file:', cleanupError.message);
-        }
-      }
-
+      const result = await this.asrProvider.transcribe(audioBuffer, this.tempDir, options);
+      return result;
     } catch (error) {
-      console.error('Speech-to-text error:', error.response?.data || error.message);
-      
+      console.error('Transcription error:', error);
       return {
         success: false,
         text: '',
-        error: error.response?.data?.error?.message || error.message,
-        timestamp: Date.now()
+        error: error.message,
+        timestamp: Date.now(),
+        provider: this.asrProvider.config ? 'unknown' : 'uninitialized'
       };
     }
   }
@@ -195,6 +124,23 @@ class SpeechToTextService {
     // and only check for minimum duration. The energy check is redundant and
     // can reject valid speech that Silero VAD correctly identified.
     return true;
+  }
+
+  /**
+   * Get current provider information
+   * @returns {Object} Current provider information
+   */
+  getProviderInfo() {
+    if (!this.asrProvider) {
+      return { provider: 'none', status: 'not initialized' };
+    }
+
+    return {
+      provider: this.asrProvider.constructor.name,
+      model: this.asrProvider.config.model,
+      apiUrl: this.asrProvider.config.apiUrl,
+      status: 'ready'
+    };
   }
 }
 

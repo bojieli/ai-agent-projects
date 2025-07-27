@@ -6,6 +6,7 @@ const config = require('./config');
 const { preprocessSentence } = require('./utils/textProcessor');
 const VoiceActivityDetector = require('./utils/vad');
 const SpeechToTextService = require('./utils/speechToText');
+const { LLMProviderFactory } = require('./utils/providers/llmProviders');
 const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
@@ -61,6 +62,9 @@ class ConnectionHandler {
     this.vad = new VoiceActivityDetector();
     this.sttService = new SpeechToTextService();
     
+    // Initialize LLM provider
+    this.initializeLLMProvider();
+    
     // VAD processing state
     this.isProcessingSTT = false;
     this.pendingAudioBuffer = Buffer.alloc(0);
@@ -71,6 +75,34 @@ class ConnectionHandler {
     this.cleanupInterval = setInterval(() => {
       this.sttService.cleanupTempFiles();
     }, 5 * 60 * 1000); // Every 5 minutes
+  }
+
+  /**
+   * Initialize LLM provider based on configuration
+   */
+  initializeLLMProvider() {
+    try {
+      const providerName = config.LLM_PROVIDER || 'openai';
+      this.llmProvider = LLMProviderFactory.createProvider(providerName, config, config);
+      console.log(`LLM Provider initialized: ${providerName}`);
+    } catch (error) {
+      console.error('Failed to initialize LLM provider:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Switch LLM provider dynamically
+   * @param {string} providerName - Provider name to switch to
+   */
+  switchLLMProvider(providerName) {
+    try {
+      this.llmProvider = LLMProviderFactory.createProvider(providerName, config, config);
+      console.log(`LLM Provider switched to: ${providerName}`);
+    } catch (error) {
+      console.error('Failed to switch LLM provider:', error);
+      throw error;
+    }
   }
 
   setupWebSocketHandlers() {
@@ -368,23 +400,17 @@ class ConnectionHandler {
 
       let accumulatedContent = '';  // Track all content received so far
 
-      const response = await axios.post(
-        config.LLM_API_URL,
-        {
-          model: config.LLM_MODEL,
-          messages: messages,
-          stream: true,
-          max_tokens: config.VISION_MAX_TOKENS
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${config.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          cancelToken: this.currentLLMRequest.token,
-          responseType: 'stream'
-        }
-      );
+      // Use LLM provider for chat completion
+      const providerResult = await this.llmProvider.createChatCompletion(messages, {
+        max_tokens: config.VISION_MAX_TOKENS,
+        cancelToken: this.currentLLMRequest.token
+      });
+
+      if (!providerResult.success) {
+        throw new Error(providerResult.error);
+      }
+
+      const response = providerResult.response;
 
       let buffer = ''; // Add this buffer to store incomplete lines
 

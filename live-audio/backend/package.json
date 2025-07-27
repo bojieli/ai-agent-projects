@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "mocha tests/*.js --timeout 120000",
+    "test:providers": "mocha tests/provider-tests.js --timeout 120000",
+    "test:asr": "mocha tests/test-asr-providers.js --timeout 120000",
+    "test:llm": "mocha tests/test-llm-providers.js --timeout 120000", 
+    "test:tts": "mocha tests/test-tts-providers.js --timeout 120000",
     "start": "node server.js"
   },
   "keywords": [],
@@ -21,5 +25,8 @@
     "onnxruntime-node": "^1.22.0-rev",
     "wav": "^1.0.2",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "mocha": "^10.2.0"
   }
 }

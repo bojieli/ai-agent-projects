@@ -1,19 +1,73 @@
 const config = {
-  // OpenAI API Configuration
-  OPENAI_API_KEY: 'your-openai-api-key-here',
+  // API Keys
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || 'your-openai-api-key-here',
+  OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || 'your-openrouter-api-key-here',
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'your-anthropic-api-key-here',
+  ARK_API_KEY: process.env.ARK_API_KEY || 'your-ark-api-key-here',
+  SILICONFLOW_API_KEY: process.env.SILICONFLOW_API_KEY || 'your-siliconflow-api-key-here',
+  
+  // Provider Selection
+  ASR_PROVIDER: 'openai', // 'openai' or 'siliconflow'
+  LLM_PROVIDER: 'openai', // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
+  TTS_PROVIDER: 'siliconflow', // 'siliconflow' (keep current)
+  
+  // ASR Configuration
+  ASR_PROVIDERS: {
+    openai: {
+      apiUrl: 'https://api.openai.com/v1/audio/transcriptions',
+      model: 'whisper-1',
+      apiKey: 'OPENAI_API_KEY'
+    },
+    siliconflow: {
+      apiUrl: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+      model: 'FunAudioLLM/SenseVoiceSmall',
+      apiKey: 'SILICONFLOW_API_KEY'
+    }
+  },
   
   // LLM Configuration
+  LLM_PROVIDERS: {
+    openai: {
+      apiUrl: 'https://api.openai.com/v1/chat/completions',
+      model: 'gpt-4o',
+      apiKey: 'OPENAI_API_KEY'
+    },
+    'openrouter-gpt4o': {
+      apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+      model: 'openai/gpt-4o',
+      apiKey: 'OPENROUTER_API_KEY'
+    },
+    'openrouter-gemini': {
+      apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+      model: 'google/gemini-2.5-flash',
+      apiKey: 'OPENROUTER_API_KEY'
+    },
+    ark: {
+      apiUrl: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+      model: 'doubao-seed-1-6-flash-250615',
+      apiKey: 'ARK_API_KEY'
+    }
+  },
+  
+  // TTS Configuration (keep current)
+  TTS_PROVIDERS: {
+    siliconflow: {
+      apiUrl: 'https://api.siliconflow.cn/v1/audio/speech',
+      model: 'fishaudio/fish-speech-1.5',
+      voice: 'fishaudio/fish-speech-1.5:diana',
+      apiKey: 'SILICONFLOW_API_KEY'
+    }
+  },
+  
+  // Legacy support (will be deprecated)
   LLM_MODEL: 'gpt-4o',
   LLM_API_URL: 'https://api.openai.com/v1/chat/completions',
-  VISION_MAX_TOKENS: 4096,
-  
-  // Speech-to-Text Configuration
   STT_API_URL: 'https://api.openai.com/v1/audio/transcriptions',
   STT_MODEL: 'whisper-1',
-  
-  // Text-to-Speech Configuration
   TTS_API_URL: 'https://api.siliconflow.cn/v1/audio/speech',
-  SILICONFLOW_API_KEY: 'your-siliconflow-api-key-here',
+  
+  // Common Configuration
+  VISION_MAX_TOKENS: 4096,
   
   // Silero VAD Configuration
   VAD_THRESHOLD: 0.5,                  // Speech probability threshold for Silero VAD (0.0 to 1.0)
