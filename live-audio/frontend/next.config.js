@@ -5,7 +5,7 @@ const nextConfig = {
   reactStrictMode: true,
   output: 'export',
   env: {
-    WEBSOCKET_PORT: process.env.WEBSOCKET_PORT || '18848',
+    WEBSOCKET_PORT: process.env.WEBSOCKET_PORT || '8848',
     IS_PRODUCTION: process.env.NODE_ENV === 'production',
   },
   // Since we're using static export, we need to disable image optimization

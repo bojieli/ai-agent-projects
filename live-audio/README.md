@@ -142,9 +142,9 @@ export ANTHROPIC_API_KEY="your-anthropic-api-key"
    ```javascript
    const config = {
      // Provider Selection - Choose your preferred providers
-     ASR_PROVIDER: 'openai',              // 'openai' or 'siliconflow'
-     LLM_PROVIDER: 'openai',              // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
-     TTS_PROVIDER: 'siliconflow',         // 'siliconflow' (Fish Audio)
+     ASR_PROVIDER: 'siliconflow',      // 'openai' or 'siliconflow'
+     LLM_PROVIDER: 'ark',              // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
+     TTS_PROVIDER: 'siliconflow',      // 'siliconflow' (Fish Audio)
      
      // API Keys (loaded from environment variables)
      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -158,32 +158,25 @@ export ANTHROPIC_API_KEY="your-anthropic-api-key"
 
 ### 3. Recommended Provider Combinations
 
-#### For Real-time Performance (Low Latency)
+#### For Real-time Performance (Low Latency in China)
 ```javascript
-ASR_PROVIDER: 'siliconflow',      // Fast SenseVoice
-LLM_PROVIDER: 'openrouter-gemini', // Fast Gemini Flash
-TTS_PROVIDER: 'siliconflow'        // Fast Fish Audio
+ASR_PROVIDER: 'siliconflow',      // 'openai' or 'siliconflow'
+LLM_PROVIDER: 'ark',              // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
+TTS_PROVIDER: 'siliconflow',      // 'siliconflow' (Fish Audio)
+```
+
+#### For Real-time Performance (Low Latency in US)
+```javascript
+ASR_PROVIDER: 'openai',            // 'openai' or 'siliconflow'
+LLM_PROVIDER: 'openrouter-gemini', // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
+TTS_PROVIDER: 'siliconflow',       // 'siliconflow' (Fish Audio)
 ```
 
 #### For Best Accuracy
 ```javascript
 ASR_PROVIDER: 'openai',           // Accurate Whisper
-LLM_PROVIDER: 'openai',           // High-quality GPT-4o
-TTS_PROVIDER: 'siliconflow'       // Natural Fish Audio
-```
-
-#### For China Deployment
-```javascript
-ASR_PROVIDER: 'siliconflow',      // No geographic restrictions
-LLM_PROVIDER: 'ark',              // Local Doubao service
-TTS_PROVIDER: 'siliconflow'       // Local Siliconflow
-```
-
-#### For Cost Optimization
-```javascript
-ASR_PROVIDER: 'siliconflow',      // Cost-effective SenseVoice
-LLM_PROVIDER: 'openrouter-gemini', // Affordable Gemini
-TTS_PROVIDER: 'siliconflow'       // Affordable Fish Audio
+LLM_PROVIDER: 'openrouter-gpt4o', // High-quality GPT-4o
+TTS_PROVIDER: 'siliconflow'       // Fish Audio
 ```
 
 ### 4. API Key Requirements

@@ -7,10 +7,10 @@ const config = {
   SILICONFLOW_API_KEY: process.env.SILICONFLOW_API_KEY || 'your-siliconflow-api-key-here',
   
   // Provider Selection
-  ASR_PROVIDER: 'openai', // 'openai' or 'siliconflow'
-  LLM_PROVIDER: 'openai', // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
+  ASR_PROVIDER: 'siliconflow', // 'openai' or 'siliconflow'
+  LLM_PROVIDER: 'ark', // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
   TTS_PROVIDER: 'siliconflow', // 'siliconflow' (keep current)
-  
+   
   // ASR Configuration
   ASR_PROVIDERS: {
     openai: {
@@ -78,7 +78,7 @@ const config = {
   AUDIO_CHUNK_SIZE: 4096,              // Audio chunk size for processing
   
   // Server Configuration
-  LISTEN_PORT: 18848,
+  LISTEN_PORT: 8848,
   LISTEN_HOST: '0.0.0.0',
   SYSTEM_PROMPT: 'You are a helpful AI assistant.',
   CANCEL_PLAYBACK_TIME_THRESHOLD: 3000,
