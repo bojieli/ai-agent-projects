@@ -52,8 +52,28 @@ User Speech → WebSocket → Backend VAD → Multi-Provider STT → Multi-Provi
 
 - Node.js (v16 or higher)
 - npm or yarn
-- Modern web browser with WebAudio API support
-- **At least one API key** from the supported providers (see Configuration section)
+- **FFmpeg** - Required for audio processing and format conversion
+- **Google Chrome** (recommended) - Best performance and compatibility for real-time audio
+  - Not recommended: Safari, Edge, or other browsers due to WebAudio API limitations
+- **API keys** from the supported providers (see Configuration section)
+
+### Installing FFmpeg
+
+#### macOS (using Homebrew)
+```bash
+brew install ffmpeg
+```
+
+#### Ubuntu/Debian
+```bash
+sudo apt update
+sudo apt install ffmpeg
+```
+
+#### Windows
+- Download from https://ffmpeg.org/download.html
+- Or use Chocolatey: `choco install ffmpeg`
+- Make sure `ffmpeg` is in your PATH
 
 ## Project Structure
 
@@ -261,9 +281,15 @@ The test suite will automatically skip providers for which you don't have API ke
 ### Common Issues
 
 1. **Missing API Keys**: Ensure required environment variables are set
-2. **Network Issues**: Check connectivity to API endpoints
-3. **Rate Limiting**: Consider switching providers or implementing retry logic
-4. **Geographic Restrictions**: Use OpenRouter for global access
+2. **FFmpeg Not Found**: Ensure FFmpeg is installed and available in your system PATH
+   - Test with: `ffmpeg -version`
+   - If not found, refer to the FFmpeg installation instructions above
+3. **Network Issues**: Check connectivity to API endpoints
+4. **Rate Limiting**: Consider switching providers or implementing retry logic
+5. **Geographic Restrictions**: Use OpenRouter for global access
+6. **ONNX Runtime Issues**: The backend uses ONNX Runtime for voice activity detection
+   - Usually resolved by the `onnxruntime-node` package automatically
+   - On some systems, you may need additional system libraries
 
 ### Performance Optimization
 
